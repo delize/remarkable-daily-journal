@@ -267,7 +267,6 @@ rmapi ls "/Daily Journal"
 │   └── workflows/
 │       └── ci.yml              # Full CI/CD pipeline
 ├── tests/
-│   ├── test_helper.bash        # Common test utilities and mocks
 │   ├── create-daily-note.bats  # Tests for create-daily-note.sh
 │   ├── cleanup-old-journals.bats # Tests for cleanup-old-journals.sh
 │   ├── entrypoint.bats         # Tests for entrypoint.sh
