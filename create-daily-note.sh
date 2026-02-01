@@ -35,7 +35,7 @@ NOTEBOOK_NAME="${FORMATTED_DATE} - ${FORMATTED_TITLE}"
 
 # Temp directory for working files
 TEMP_DIR=$(mktemp -d)
-trap "rm -rf $TEMP_DIR" EXIT
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"

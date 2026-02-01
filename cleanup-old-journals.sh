@@ -36,7 +36,7 @@ log "Checking for unused journal from: $YESTERDAY_DATE"
 
 # Create temp directory for operations
 TEMP_DIR=$(mktemp -d)
-trap "rm -rf $TEMP_DIR" EXIT
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
 # Generate a reference blank PDF to compare against
 generate_blank_reference() {
@@ -94,7 +94,6 @@ BLANK_SIZE=$(stat -f%z "$BLANK_PDF" 2>/dev/null || stat -c%s "$BLANK_PDF")
 log "Reference blank PDF size: $BLANK_SIZE bytes"
 
 # Download yesterday's journal
-DOWNLOADED_PDF="$TEMP_DIR/downloaded.pdf"
 log "Downloading journal for comparison..."
 
 cd "$TEMP_DIR"
