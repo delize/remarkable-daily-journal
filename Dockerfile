@@ -3,11 +3,14 @@
 
 FROM golang:1.23-alpine AS builder
 
-# Install git for go install
+# Install git for cloning
 RUN apk add --no-cache git
 
-# Build rmapi from source (ddvk fork)
-RUN go install github.com/ddvk/rmapi@latest
+# Clone and build rmapi from source (ddvk fork)
+# Using git clone + go build because go.mod has replace directives
+RUN git clone --depth 1 https://github.com/ddvk/rmapi.git /src/rmapi && \
+    cd /src/rmapi && \
+    go build -o /go/bin/rmapi .
 
 # Runtime image
 FROM alpine:3.19
