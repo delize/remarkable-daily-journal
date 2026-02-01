@@ -135,13 +135,13 @@ EOF
 }
 
 @test "schedule command shows configuration" {
-    # schedule command will try to start supercrond which won't work in test
+    # schedule command will start the scheduler loop which won't exit in test
     # but we can verify it at least starts correctly
     export CRON_SCHEDULE="0 7 * * *"
     export TZ="America/New_York"
 
     cd "$(dirname "$SCRIPT")"
-    # Use timeout to avoid hanging on supercrond
+    # Use timeout to avoid hanging on scheduler loop
     run timeout 2 "$SCRIPT" schedule 2>&1 || true
 
     [[ "$output" == *"Schedule:"* ]] || [[ "$output" == *"0 7"* ]]

@@ -322,7 +322,7 @@ The GitHub Actions workflows run automatically on push/PR:
 
 1. **Build stage**: Compiles `rmapi` from the [ddvk/rmapi](https://github.com/ddvk/rmapi) fork (actively maintained)
 2. **Runtime**: Alpine Linux with ghostscript for PDF generation
-3. **Scheduling**: Uses `supercrond` (lightweight cron for containers)
+3. **Scheduling**: Uses a lightweight shell-based scheduler (no root required)
 4. **Auth storage**: Persisted in Docker volume, survives container updates
 
 ## Contributing

@@ -52,20 +52,71 @@ case "${1:-run}" in
         
         # Export environment for cron
         export_env
-        
-        # Create crontab
-        cat > /app/crontab << EOF
-# reMarkable Daily Journal
-# Runs at: $CRON_SCHEDULE
-# First cleanup unused previous day's journal, then create new one
-$CRON_SCHEDULE /bin/bash -c 'source /app/.env 2>/dev/null; /app/cleanup-old-journals.sh; /app/create-daily-note.sh' >> /proc/1/fd/1 2>&1
-EOF
-        
+
         log "Cron job configured. Waiting for schedule..."
         log "Next run will be at the scheduled time. Use 'run' command to trigger immediately."
-        
-        # Run supercrond (alpine's cron daemon)
-        exec supercrond -config /app/crontab
+
+        # Parse cron schedule to determine run time
+        # Format: minute hour day month weekday
+        CRON_MIN=$(echo "$CRON_SCHEDULE" | awk '{print $1}')
+        CRON_HOUR=$(echo "$CRON_SCHEDULE" | awk '{print $2}')
+        CRON_DOM=$(echo "$CRON_SCHEDULE" | awk '{print $3}')
+        CRON_MON=$(echo "$CRON_SCHEDULE" | awk '{print $4}')
+        CRON_DOW=$(echo "$CRON_SCHEDULE" | awk '{print $5}')
+
+        # Simple scheduler loop (checks every minute)
+        while true; do
+            CURRENT_MIN=$(date +%-M)
+            CURRENT_HOUR=$(date +%-H)
+            CURRENT_DOM=$(date +%-d)
+            CURRENT_MON=$(date +%-m)
+            CURRENT_DOW=$(date +%u)  # 1=Monday, 7=Sunday
+
+            # Check if current time matches cron schedule
+            MATCH=true
+
+            # Check minute
+            if [ "$CRON_MIN" != "*" ] && [ "$CRON_MIN" != "$CURRENT_MIN" ]; then
+                MATCH=false
+            fi
+
+            # Check hour
+            if [ "$CRON_HOUR" != "*" ] && [ "$CRON_HOUR" != "$CURRENT_HOUR" ]; then
+                MATCH=false
+            fi
+
+            # Check day of month
+            if [ "$CRON_DOM" != "*" ] && [ "$CRON_DOM" != "$CURRENT_DOM" ]; then
+                MATCH=false
+            fi
+
+            # Check month
+            if [ "$CRON_MON" != "*" ] && [ "$CRON_MON" != "$CURRENT_MON" ]; then
+                MATCH=false
+            fi
+
+            # Check day of week (convert cron 0-6 Sun-Sat to date 1-7 Mon-Sun)
+            if [ "$CRON_DOW" != "*" ]; then
+                # Handle both formats: 0=Sunday or 7=Sunday
+                if [ "$CRON_DOW" = "0" ] || [ "$CRON_DOW" = "7" ]; then
+                    [ "$CURRENT_DOW" != "7" ] && MATCH=false
+                elif [ "$CRON_DOW" != "$CURRENT_DOW" ]; then
+                    MATCH=false
+                fi
+            fi
+
+            if [ "$MATCH" = "true" ]; then
+                log "Schedule matched! Running daily journal tasks..."
+                source /app/.env 2>/dev/null || true
+                /app/cleanup-old-journals.sh || log "Cleanup completed (or skipped)"
+                /app/create-daily-note.sh || log "Create note completed (or failed)"
+                # Sleep 60s to avoid running multiple times in the same minute
+                sleep 60
+            fi
+
+            # Sleep until next minute
+            sleep $((60 - $(date +%S)))
+        done
         ;;
     
     test)

@@ -13,11 +13,11 @@ RUN go install github.com/ddvk/rmapi@latest
 FROM alpine:3.19
 
 # Install dependencies
+# Note: crond is included in busybox (part of Alpine base)
 RUN apk add --no-cache \
     bash \
     tzdata \
-    ghostscript \
-    supercrond
+    ghostscript
 
 # Copy rmapi binary from builder
 COPY --from=builder /go/bin/rmapi /usr/local/bin/rmapi
