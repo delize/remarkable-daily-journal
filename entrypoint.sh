@@ -14,6 +14,72 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
+# Configuration directory
+CONFIG_DIR="/app/.config/rmapi"
+CONFIG_FILE="$CONFIG_DIR/rmapi.conf"
+
+# Check if config directory is writable
+check_config_writable() {
+    if [ ! -d "$CONFIG_DIR" ]; then
+        mkdir -p "$CONFIG_DIR" 2>/dev/null || {
+            log "ERROR: Cannot create config directory $CONFIG_DIR"
+            log ""
+            log "The config directory must be writable by the container user (UID 1000)."
+            log "If using a bind mount, fix permissions on the host:"
+            log ""
+            log "  sudo chown -R 1000:1000 /path/to/your/rmapi/directory"
+            log ""
+            log "Or use a named volume instead (handles permissions automatically):"
+            log ""
+            log "  docker run -v rmapi-config:/app/.config/rmapi ..."
+            log ""
+            return 1
+        }
+    fi
+
+    if ! touch "$CONFIG_DIR/.write-test" 2>/dev/null; then
+        log "ERROR: Config directory $CONFIG_DIR is not writable"
+        log ""
+        log "The config directory must be writable by the container user (UID 1000)."
+        log "Fix permissions on the host:"
+        log ""
+        log "  sudo chown -R 1000:1000 /path/to/your/rmapi/directory"
+        log ""
+        return 1
+    fi
+    rm -f "$CONFIG_DIR/.write-test"
+    return 0
+}
+
+# Check if authenticated (with better error detection)
+check_auth() {
+    local output
+    local exit_code
+
+    # Run rmapi and capture both output and exit code
+    output=$(rmapi ls / 2>&1) && exit_code=0 || exit_code=$?
+
+    if [ $exit_code -eq 0 ]; then
+        return 0  # Authenticated
+    elif [ $exit_code -eq 137 ] || [ $exit_code -eq 139 ]; then
+        # 137 = SIGKILL (OOM), 139 = SIGSEGV
+        log "ERROR: rmapi was killed (exit code $exit_code)"
+        log "This usually means the container has insufficient memory."
+        log "Increase the memory limit to at least 768MB:"
+        log ""
+        log "  Docker Compose: mem_limit: 768m"
+        log "  Docker run: --memory=768m"
+        log ""
+        return 2  # Killed
+    elif echo "$output" | grep -qi "unauthorized\|not authenticated\|auth"; then
+        return 1  # Not authenticated
+    else
+        log "ERROR: rmapi failed with exit code $exit_code"
+        log "Output: $output"
+        return 1
+    fi
+}
+
 # Export environment variables for cron
 export_env() {
     # Export all REMARKABLE_* and common vars for the cron job
@@ -24,9 +90,22 @@ case "${1:-run}" in
     auth)
         # Interactive authentication mode
         log "Starting rmapi authentication..."
+
+        # Check if we can write to config directory
+        if ! check_config_writable; then
+            exit 1
+        fi
+
         log "Visit https://my.remarkable.com/device/browser/connect to get a one-time code"
         rmapi
-        log "Authentication complete. Config saved to /app/.config/rmapi"
+
+        # Verify the config was saved
+        if [ -f "$CONFIG_FILE" ]; then
+            log "Authentication complete. Config saved to $CONFIG_DIR"
+        else
+            log "WARNING: Authentication may have failed - config file not found"
+            log "Expected location: $CONFIG_FILE"
+        fi
         ;;
     
     run)
@@ -41,11 +120,33 @@ case "${1:-run}" in
         log "Starting scheduled daily journal creator"
         log "Schedule: $CRON_SCHEDULE (timezone: $TZ)"
         log "Target folder: ${REMARKABLE_FOLDER:-/Daily Journal}"
-        
-        # Verify authentication
-        if ! rmapi ls / > /dev/null 2>&1; then
-            log "ERROR: rmapi not authenticated!"
-            log "Run: docker run -it -v rmapi-config:/app/.config/rmapi remarkable-daily-journal auth"
+
+        # Check if config file exists
+        if [ ! -f "$CONFIG_FILE" ]; then
+            log "ERROR: No authentication config found at $CONFIG_FILE"
+            log ""
+            log "Run authentication first:"
+            log "  docker run -it --rm -v /path/to/rmapi:/app/.config/rmapi \\"
+            log "    ghcr.io/delize/remarkable-daily-journal:latest auth"
+            log ""
+            log "If using bind mounts, ensure the directory is writable:"
+            log "  sudo chown -R 1000:1000 /path/to/rmapi"
+            exit 1
+        fi
+
+        # Verify authentication works
+        log "Verifying rmapi authentication..."
+        if ! check_auth; then
+            auth_result=$?
+            if [ $auth_result -eq 2 ]; then
+                # OOM - error already logged by check_auth
+                exit 1
+            fi
+            log "ERROR: rmapi not authenticated or token expired"
+            log ""
+            log "Re-run authentication:"
+            log "  docker run -it --rm -v /path/to/rmapi:/app/.config/rmapi \\"
+            log "    ghcr.io/delize/remarkable-daily-journal:latest auth"
             exit 1
         fi
         log "✓ rmapi authentication verified"
@@ -122,15 +223,28 @@ case "${1:-run}" in
     test)
         # Test mode: verify everything works
         log "Testing configuration..."
-        
-        # Check rmapi auth
-        if rmapi ls / > /dev/null 2>&1; then
-            log "✓ rmapi authentication valid"
-        else
-            log "✗ rmapi not authenticated"
+
+        # Check config directory
+        if ! check_config_writable; then
             exit 1
         fi
-        
+        log "✓ Config directory writable"
+
+        # Check config file exists
+        if [ ! -f "$CONFIG_FILE" ]; then
+            log "✗ Config file not found at $CONFIG_FILE"
+            exit 1
+        fi
+        log "✓ Config file exists"
+
+        # Check rmapi auth
+        if check_auth; then
+            log "✓ rmapi authentication valid"
+        else
+            log "✗ rmapi authentication failed"
+            exit 1
+        fi
+
         # Test with dry run
         DRY_RUN=true /app/create-daily-note.sh
         log "✓ All tests passed"
