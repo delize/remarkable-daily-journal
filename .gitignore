@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment and secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Docker
+docker-compose.override.yml
+
+# Temporary files
+*.tmp
+*.log
+tmp/
+
+# rmapi config (contains auth tokens - never commit)
+.config/
+rmapi.conf

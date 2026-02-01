@@ -1,0 +1,52 @@
+version: "3.8"
+
+services:
+  remarkable-daily-journal:
+    # Option 1: Use pre-built image from GitHub Container Registry
+    # image: ghcr.io/delize/remarkable-daily-journal:latest
+
+    # Option 2: Build from source (default)
+    build: .
+    image: remarkable-daily-journal:latest
+    container_name: remarkable-daily-journal
+    restart: unless-stopped
+    
+    # Run in scheduled daemon mode
+    command: schedule
+    
+    # Persist rmapi authentication
+    volumes:
+      - rmapi-config:/app/.config/rmapi
+    
+    environment:
+      # Timezone - set to your local timezone
+      - TZ=Europe/Stockholm
+      
+      # Schedule: when to create daily notes (cron format)
+      # Default: 6:00 AM daily
+      - CRON_SCHEDULE=0 6 * * *
+      
+      # reMarkable folder to store daily journals
+      - REMARKABLE_FOLDER=/Daily Journal
+      
+      # Date format for the notebook filename
+      - DATE_FORMAT=%Y-%m-%d
+      
+      # Date format for the display title
+      # %A = weekday, %B = month, %d = day, %Y = year
+      - TITLE_FORMAT=%A, %B %d, %Y
+      
+      # Number of blank pages per notebook
+      - TEMPLATE_PAGES=5
+
+      # Cleanup settings for unused journals
+      # Set to "false" to disable cleanup of unused previous day journals
+      - CLEANUP_ENABLED=true
+
+      # Size tolerance (bytes) - if downloaded journal size differs from
+      # blank template by less than this, it's considered unused
+      - SIZE_TOLERANCE=5000
+
+volumes:
+  rmapi-config:
+    name: rmapi-config
