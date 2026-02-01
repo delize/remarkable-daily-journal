@@ -24,16 +24,16 @@ setup() {
 @test "script defines required environment variable defaults" {
     grep -q 'REMARKABLE_FOLDER=.*:-' "$SCRIPT"
     grep -q 'DATE_FORMAT=.*:-' "$SCRIPT"
-    grep -q 'TITLE_FORMAT=.*:-' "$SCRIPT"
     grep -q 'TEMPLATE_PAGES=.*:-' "$SCRIPT"
+    grep -q 'TEMPLATE_STYLE=.*:-' "$SCRIPT"
 }
 
 @test "script has log function" {
     grep -q "^log()" "$SCRIPT"
 }
 
-@test "script has create_blank_pdf function" {
-    grep -q "^create_blank_pdf()" "$SCRIPT"
+@test "script has create_pdf function" {
+    grep -q "^create_pdf()" "$SCRIPT"
 }
 
 @test "script creates temp directory with cleanup trap" {

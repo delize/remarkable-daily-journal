@@ -25,8 +25,8 @@ setup() {
     grep -q 'CLEANUP_ENABLED=.*:-' "$SCRIPT"
 }
 
-@test "script defines SIZE_TOLERANCE variable" {
-    grep -q 'SIZE_TOLERANCE=.*:-' "$SCRIPT"
+@test "script defines SIZE_THRESHOLD variable" {
+    grep -q 'SIZE_THRESHOLD=.*:-' "$SCRIPT"
 }
 
 @test "script has log function with cleanup tag" {
@@ -46,8 +46,9 @@ setup() {
     grep -q "trap.*rm -rf.*EXIT" "$SCRIPT"
 }
 
-@test "script has generate_blank_reference function" {
-    grep -q "generate_blank_reference()" "$SCRIPT"
+@test "script uses size threshold for comparison" {
+    grep -q "SIZE_THRESHOLD" "$SCRIPT"
+    grep -q "gt.*SIZE_THRESHOLD" "$SCRIPT"
 }
 
 @test "script checks rmapi authentication" {
@@ -62,9 +63,9 @@ setup() {
     grep -q "rmapi get" "$SCRIPT"
 }
 
-@test "script compares file sizes" {
-    grep -q "SIZE_DIFF" "$SCRIPT"
-    grep -q "SIZE_TOLERANCE" "$SCRIPT"
+@test "script compares file sizes to threshold" {
+    grep -q "DOWNLOADED_SIZE" "$SCRIPT"
+    grep -q "SIZE_THRESHOLD" "$SCRIPT"
 }
 
 @test "script removes unused journal" {
