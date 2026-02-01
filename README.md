@@ -132,6 +132,36 @@ To disable cleanup:
 - CLEANUP_ENABLED=false
 ```
 
+## Authentication Storage
+
+The rmapi authentication token must persist between container restarts. Two options:
+
+### Option A: Docker Named Volume (Default)
+
+```yaml
+volumes:
+  - rmapi-config:/app/.config/rmapi
+```
+
+- Managed by Docker
+- Survives container rebuilds
+- View with: `docker volume inspect rmapi-config`
+
+### Option B: Bind Mount to Local Directory
+
+```yaml
+volumes:
+  - ./config/rmapi:/app/.config/rmapi
+  # Or absolute path:
+  - /home/user/.config/rmapi:/app/.config/rmapi
+```
+
+- You control the location
+- Easy to backup/migrate
+- Create the directory first: `mkdir -p ./config/rmapi`
+
+When using bind mount, comment out the `volumes:` section at the bottom of docker-compose.yml.
+
 ## Commands
 
 | Command | Description |

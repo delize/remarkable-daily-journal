@@ -14,10 +14,15 @@ services:
     # Run in scheduled daemon mode
     command: schedule
     
-    # Persist rmapi authentication
+    # Persist rmapi authentication - choose ONE option:
     volumes:
+      # Option A: Docker named volume (managed by Docker)
       - rmapi-config:/app/.config/rmapi
-    
+
+      # Option B: Bind mount to local directory (uncomment and adjust path)
+      # - ./config/rmapi:/app/.config/rmapi
+      # - /path/to/your/rmapi-config:/app/.config/rmapi
+
     environment:
       # Timezone - set to your local timezone
       - TZ=Europe/Stockholm
@@ -47,6 +52,8 @@ services:
       # blank template by less than this, it's considered unused
       - SIZE_TOLERANCE=5000
 
+# Only needed if using Option A (Docker named volume)
+# Comment out this section if using Option B (bind mount)
 volumes:
   rmapi-config:
     name: rmapi-config
