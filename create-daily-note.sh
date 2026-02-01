@@ -7,6 +7,9 @@
 #   REMARKABLE_FOLDER - Target folder on reMarkable (default: /Daily Journal)
 #   DATE_FORMAT       - Date format for filename (default: %Y-%m-%d)
 #   TEMPLATE_PAGES    - Number of blank pages (default: 5)
+#   TEMPLATE_STYLE    - Page style: blank, lined, grid (default: blank)
+#   LINE_SPACING      - Line spacing in points for lined/grid (default: 24)
+#   LINE_COLOR        - Line color as "R G B" values 0-1 (default: 0.85 0.85 0.85)
 #   DRY_RUN           - Set to "true" to skip upload
 #
 
@@ -16,7 +19,15 @@ set -e
 REMARKABLE_FOLDER="${REMARKABLE_FOLDER:-/Daily Journal}"
 DATE_FORMAT="${DATE_FORMAT:-%Y-%m-%d}"
 TEMPLATE_PAGES="${TEMPLATE_PAGES:-5}"
+TEMPLATE_STYLE="${TEMPLATE_STYLE:-blank}"
+LINE_SPACING="${LINE_SPACING:-24}"
+LINE_COLOR="${LINE_COLOR:-0.85 0.85 0.85}"
 DRY_RUN="${DRY_RUN:-false}"
+
+# Page dimensions (Letter size in points)
+PAGE_WIDTH=612
+PAGE_HEIGHT=792
+MARGIN=36  # 0.5 inch margin
 
 # Use provided date or default to today
 if [ -n "$1" ]; then
@@ -37,39 +48,85 @@ log() {
 log "Creating daily journal: $FORMATTED_DATE"
 log "Target folder: $REMARKABLE_FOLDER"
 
-# Create a blank PDF using ghostscript
-create_blank_pdf() {
+# Create PDF using ghostscript with specified template style
+create_pdf() {
     local output_file="$1"
     local num_pages="$2"
-    
-    log "Generating $num_pages page blank PDF..."
-    
-    # Create PostScript that generates blank pages
-    # reMarkable uses approximately 1404x1872 pixels at 226 DPI
-    # which is roughly 445x594 points (Letter-ish size)
-    # Using standard Letter (612x792) for compatibility
-    cat > "$TEMP_DIR/blank.ps" << EOF
+    local style="$3"
+
+    log "Generating $num_pages page $style PDF..."
+
+    # Generate PostScript based on template style
+    case "$style" in
+        lined)
+            cat > "$TEMP_DIR/template.ps" << EOF
 %!PS-Adobe-3.0
+/drawlines {
+    $LINE_COLOR setrgbcolor
+    0.5 setlinewidth
+    $MARGIN $LINE_SPACING $PAGE_HEIGHT $MARGIN sub {
+        dup $MARGIN exch moveto
+        $PAGE_WIDTH $MARGIN sub exch lineto
+        stroke
+    } for
+} def
+
 1 1 $num_pages {
-    612 792 scale
+    drawlines
     showpage
 } for
 EOF
-    
+            ;;
+        grid)
+            cat > "$TEMP_DIR/template.ps" << EOF
+%!PS-Adobe-3.0
+/drawgrid {
+    $LINE_COLOR setrgbcolor
+    0.5 setlinewidth
+    % Horizontal lines
+    $MARGIN $LINE_SPACING $PAGE_HEIGHT $MARGIN sub {
+        dup $MARGIN exch moveto
+        $PAGE_WIDTH $MARGIN sub exch lineto
+        stroke
+    } for
+    % Vertical lines
+    $MARGIN $LINE_SPACING $PAGE_WIDTH $MARGIN sub {
+        dup $MARGIN moveto
+        dup $PAGE_HEIGHT $MARGIN sub lineto
+        stroke
+    } for
+} def
+
+1 1 $num_pages {
+    drawgrid
+    showpage
+} for
+EOF
+            ;;
+        *)  # blank
+            cat > "$TEMP_DIR/template.ps" << EOF
+%!PS-Adobe-3.0
+1 1 $num_pages {
+    showpage
+} for
+EOF
+            ;;
+    esac
+
     gs -sDEVICE=pdfwrite \
        -dNOPAUSE \
        -dBATCH \
        -dQUIET \
-       -dDEVICEWIDTHPOINTS=612 \
-       -dDEVICEHEIGHTPOINTS=792 \
+       -dDEVICEWIDTHPOINTS=$PAGE_WIDTH \
+       -dDEVICEHEIGHTPOINTS=$PAGE_HEIGHT \
        -sOutputFile="$output_file" \
-       "$TEMP_DIR/blank.ps"
-    
+       "$TEMP_DIR/template.ps"
+
     log "PDF created: $output_file"
 }
 
 PDF_FILE="$TEMP_DIR/${FORMATTED_DATE}.pdf"
-create_blank_pdf "$PDF_FILE" "$TEMPLATE_PAGES"
+create_pdf "$PDF_FILE" "$TEMPLATE_PAGES" "$TEMPLATE_STYLE"
 
 if [ "$DRY_RUN" = "true" ]; then
     log "DRY RUN: Would upload $FORMATTED_DATE to $REMARKABLE_FOLDER"
