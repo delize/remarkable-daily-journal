@@ -24,10 +24,10 @@ check_config_writable() {
         mkdir -p "$CONFIG_DIR" 2>/dev/null || {
             log "ERROR: Cannot create config directory $CONFIG_DIR"
             log ""
-            log "The config directory must be writable by the container user (UID 1000)."
+            log "The config directory must be writable by the container user (UID ${PUID:-1000})."
             log "If using a bind mount, fix permissions on the host:"
             log ""
-            log "  sudo chown -R 1000:1000 /path/to/your/rmapi/directory"
+            log "  sudo chown -R ${PUID:-1000}:${PGID:-1000} /path/to/your/rmapi/directory"
             log ""
             log "Or use a named volume instead (handles permissions automatically):"
             log ""
@@ -40,10 +40,10 @@ check_config_writable() {
     if ! touch "$CONFIG_DIR/.write-test" 2>/dev/null; then
         log "ERROR: Config directory $CONFIG_DIR is not writable"
         log ""
-        log "The config directory must be writable by the container user (UID 1000)."
+        log "The config directory must be writable by the container user (UID ${PUID:-1000})."
         log "Fix permissions on the host:"
         log ""
-        log "  sudo chown -R 1000:1000 /path/to/your/rmapi/directory"
+        log "  sudo chown -R ${PUID:-1000}:${PGID:-1000} /path/to/your/rmapi/directory"
         log ""
         return 1
     fi
@@ -130,7 +130,7 @@ case "${1:-run}" in
             log "    ghcr.io/delize/remarkable-daily-journal:latest auth"
             log ""
             log "If using bind mounts, ensure the directory is writable:"
-            log "  sudo chown -R 1000:1000 /path/to/rmapi"
+            log "  sudo chown -R ${PUID:-1000}:${PGID:-1000} /path/to/rmapi"
             exit 1
         fi
 

@@ -15,6 +15,10 @@ RUN git clone --depth 1 https://github.com/ddvk/rmapi.git /src/rmapi && \
 # Runtime image
 FROM alpine:3.19
 
+# User/group configuration (can be overridden at build time)
+ARG PUID=1000
+ARG PGID=1000
+
 # Install dependencies
 # Note: crond is included in busybox (part of Alpine base)
 RUN apk add --no-cache \
@@ -25,8 +29,13 @@ RUN apk add --no-cache \
 # Copy rmapi binary from builder
 COPY --from=builder /go/bin/rmapi /usr/local/bin/rmapi
 
-# Create app user
-RUN adduser -D -h /app app
+# Create app user with configurable UID/GID
+RUN addgroup -g ${PGID} app && \
+    adduser -D -h /app -u ${PUID} -G app app
+
+# Store UID/GID for runtime reference
+ENV PUID=${PUID} PGID=${PGID}
+
 WORKDIR /app
 
 # Copy scripts
