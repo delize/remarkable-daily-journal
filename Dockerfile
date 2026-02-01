@@ -1,7 +1,7 @@
 # reMarkable Daily Journal Creator
 # Automatically creates dated notebooks on your reMarkable tablet
 
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 # Install git for go install
 RUN apk add --no-cache git
