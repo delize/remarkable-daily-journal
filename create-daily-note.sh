@@ -6,7 +6,6 @@
 # Environment variables:
 #   REMARKABLE_FOLDER - Target folder on reMarkable (default: /Daily Journal)
 #   DATE_FORMAT       - Date format for filename (default: %Y-%m-%d)
-#   TITLE_FORMAT      - Date format for display title (default: %A, %B %d, %Y)
 #   TEMPLATE_PAGES    - Number of blank pages (default: 5)
 #   DRY_RUN           - Set to "true" to skip upload
 #
@@ -16,7 +15,6 @@ set -e
 # Configuration from environment or defaults
 REMARKABLE_FOLDER="${REMARKABLE_FOLDER:-/Daily Journal}"
 DATE_FORMAT="${DATE_FORMAT:-%Y-%m-%d}"
-TITLE_FORMAT="${TITLE_FORMAT:-%A, %B %d, %Y}"
 TEMPLATE_PAGES="${TEMPLATE_PAGES:-5}"
 DRY_RUN="${DRY_RUN:-false}"
 
@@ -24,14 +22,9 @@ DRY_RUN="${DRY_RUN:-false}"
 if [ -n "$1" ]; then
     TARGET_DATE="$1"
     FORMATTED_DATE=$(date -d "$TARGET_DATE" +"$DATE_FORMAT")
-    FORMATTED_TITLE=$(date -d "$TARGET_DATE" +"$TITLE_FORMAT")
 else
     FORMATTED_DATE=$(date +"$DATE_FORMAT")
-    FORMATTED_TITLE=$(date +"$TITLE_FORMAT")
 fi
-
-# Notebook name (what appears on reMarkable)
-NOTEBOOK_NAME="${FORMATTED_DATE} - ${FORMATTED_TITLE}"
 
 # Temp directory for working files
 TEMP_DIR=$(mktemp -d)
@@ -41,7 +34,7 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
-log "Creating daily journal: $NOTEBOOK_NAME"
+log "Creating daily journal: $FORMATTED_DATE"
 log "Target folder: $REMARKABLE_FOLDER"
 
 # Create a blank PDF using ghostscript
@@ -79,7 +72,7 @@ PDF_FILE="$TEMP_DIR/${FORMATTED_DATE}.pdf"
 create_blank_pdf "$PDF_FILE" "$TEMPLATE_PAGES"
 
 if [ "$DRY_RUN" = "true" ]; then
-    log "DRY RUN: Would upload $NOTEBOOK_NAME to $REMARKABLE_FOLDER"
+    log "DRY RUN: Would upload $FORMATTED_DATE to $REMARKABLE_FOLDER"
     exit 0
 fi
 
@@ -104,11 +97,4 @@ fi
 log "Uploading to reMarkable..."
 rmapi put "$PDF_FILE" "$REMARKABLE_FOLDER"
 
-# Rename to include the full title (rmapi names it based on filename)
-CURRENT_NAME=$(basename "$PDF_FILE" .pdf)
-if [ "$CURRENT_NAME" != "$NOTEBOOK_NAME" ]; then
-    log "Renaming notebook to full title..."
-    rmapi mv "$REMARKABLE_FOLDER/$CURRENT_NAME" "$REMARKABLE_FOLDER/$NOTEBOOK_NAME" 2>/dev/null || true
-fi
-
-log "✓ Daily journal created successfully: $NOTEBOOK_NAME"
+log "✓ Daily journal created successfully: $FORMATTED_DATE"

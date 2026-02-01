@@ -268,14 +268,13 @@ case "${1:-run}" in
         echo "Environment variables:"
         echo "  REMARKABLE_FOLDER  - Target folder (default: /Daily Journal)"
         echo "  DATE_FORMAT        - Filename date format (default: %Y-%m-%d)"
-        echo "  TITLE_FORMAT       - Display title format (default: %A, %B %d, %Y)"
         echo "  TEMPLATE_PAGES     - Pages per notebook (default: 5)"
         echo "  CRON_SCHEDULE      - Cron expression (default: 0 6 * * *)"
         echo "  TZ                 - Timezone (default: UTC)"
         echo ""
         echo "Cleanup settings:"
         echo "  CLEANUP_ENABLED    - Enable cleanup of unused journals (default: true)"
-        echo "  SIZE_TOLERANCE     - Max size diff in bytes to consider unused (default: 5000)"
+        echo "  SIZE_THRESHOLD     - Files larger than this (bytes) are kept (default: 8000)"
         exit 1
         ;;
 esac
