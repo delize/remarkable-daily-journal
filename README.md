@@ -265,8 +265,7 @@ rmapi ls "/Daily Journal"
 .
 ├── .github/
 │   └── workflows/
-│       ├── docker-publish.yml  # CI/CD to build and push to GHCR
-│       └── test.yml            # Linting, syntax checks, unit tests
+│       └── ci.yml              # Full CI/CD pipeline
 ├── tests/
 │   ├── test_helper.bash        # Common test utilities and mocks
 │   ├── create-daily-note.bats  # Tests for create-daily-note.sh
@@ -304,19 +303,19 @@ sudo apt-get install shellcheck bats
 
 ### CI/CD Pipeline
 
-The GitHub Actions workflows run automatically on push/PR:
+The GitHub Actions workflow (`ci.yml`) runs automatically on push/PR:
 
-1. **test.yml** - Runs first:
-   - Shellcheck linting
-   - Bash syntax validation
-   - Bats unit tests
-   - Docker build test
-   - Integration tests (dry run)
+```
+Stage 1: Lint          → Shellcheck + Bash syntax validation
+    ↓
+Stage 2: Unit Tests    → Bats test suite with mocked dependencies
+    ↓
+Stage 3: Docker Build  → Build image + integration tests (dry run)
+    ↓
+Stage 4: Push          → Multi-arch build (amd64 + arm64) → GHCR
+```
 
-2. **docker-publish.yml** - Runs after tests pass:
-   - Builds multi-arch image (amd64 + arm64)
-   - Pushes to GitHub Container Registry
-   - Tags with version, branch, and sha
+Push stage only runs on `main` branch and version tags, not on PRs.
 
 ## How It Works
 
