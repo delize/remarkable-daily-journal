@@ -154,8 +154,13 @@ case "${1:-run}" in
         # Export environment for cron
         export_env
 
+        # Run cleanup and create on startup
+        log "Running initial cleanup and journal creation on startup..."
+        /app/cleanup-old-journals.sh || log "Startup cleanup completed (or skipped)"
+        /app/create-daily-note.sh || log "Startup note creation completed (or failed)"
+
         log "Cron job configured. Waiting for schedule..."
-        log "Next run will be at the scheduled time. Use 'run' command to trigger immediately."
+        log "Next run will be at the scheduled time."
 
         # Parse cron schedule to determine run time
         # Format: minute hour day month weekday
