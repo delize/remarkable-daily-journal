@@ -136,8 +136,21 @@ while IFS= read -r line; do
     WORK_DIR="$TEMP_DIR/$DOC_DATE"
     mkdir -p "$WORK_DIR"
 
-    if ! (cd "$WORK_DIR" && rmapi get "$DOC_PATH" > /dev/null 2>&1); then
-        log "  Failed to download, skipping"
+    GET_OUTPUT=$(cd "$WORK_DIR" && rmapi get "$DOC_PATH" 2>&1) || true
+    GET_EXIT=$?
+    log "  rmapi get exit=$GET_EXIT output: $GET_OUTPUT"
+
+    # List all files in work directory for debugging
+    WORK_FILES=$(find "$WORK_DIR" -type f 2>/dev/null)
+    if [ -n "$WORK_FILES" ]; then
+        log "  Files downloaded:"
+        echo "$WORK_FILES" | while IFS= read -r f; do
+            FILE_SIZE=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f")
+            FILE_MAGIC=$(head -c4 "$f" 2>/dev/null | od -A n -t x1 | tr -d ' ')
+            log "    $(basename "$f") ($FILE_SIZE bytes, magic: $FILE_MAGIC)"
+        done
+    else
+        log "  No files found in $WORK_DIR"
         rm -rf "$WORK_DIR"
         continue
     fi
