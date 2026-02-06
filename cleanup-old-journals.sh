@@ -67,7 +67,6 @@ echo "$FOLDER_LISTING" > "$TEMP_DIR/listing.txt"
 # Returns 0 if annotated (keep), 1 if not annotated (delete)
 check_has_annotations() {
     local file="$1"
-    local work_dir="$2"
 
     # Check if it's a ZIP file by magic bytes (ZIP starts with "PK")
     if [ "$(head -c2 "$file")" = "PK" ]; then
@@ -152,7 +151,7 @@ while IFS= read -r line; do
         continue
     fi
 
-    if check_has_annotations "$DOWNLOADED_FILE" "$WORK_DIR"; then
+    if check_has_annotations "$DOWNLOADED_FILE"; then
         log "  Journal has annotations, keeping"
         KEPT=$((KEPT + 1))
     else
