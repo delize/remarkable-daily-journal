@@ -142,8 +142,8 @@ while IFS= read -r line; do
         continue
     fi
 
-    # Find the downloaded file
-    DOWNLOADED_FILE=$(find "$WORK_DIR" -maxdepth 1 -type f \( -name "*.zip" -o -name "*.pdf" \) 2>/dev/null | head -1)
+    # Find the downloaded file (rmapi may save without an extension)
+    DOWNLOADED_FILE=$(find "$WORK_DIR" -maxdepth 1 -type f 2>/dev/null | head -1)
 
     if [ -z "$DOWNLOADED_FILE" ] || [ ! -f "$DOWNLOADED_FILE" ]; then
         log "  Downloaded file not found, skipping"
