@@ -24,7 +24,8 @@ ARG PGID=1000
 RUN apk add --no-cache \
     bash \
     tzdata \
-    ghostscript
+    ghostscript \
+    unzip
 
 # Copy rmapi binary from builder
 COPY --from=builder /go/bin/rmapi /usr/local/bin/rmapi

@@ -29,6 +29,10 @@ setup() {
     grep -q 'SIZE_THRESHOLD=.*:-' "$SCRIPT"
 }
 
+@test "script defines CLEANUP_KEEP_DAYS variable" {
+    grep -q 'CLEANUP_KEEP_DAYS=.*:-' "$SCRIPT"
+}
+
 @test "script has log function with cleanup tag" {
     grep -q '\[cleanup\]' "$SCRIPT"
 }
@@ -37,16 +41,12 @@ setup() {
     grep -q 'CLEANUP_ENABLED.*!=.*true' "$SCRIPT"
 }
 
-@test "script calculates yesterday's date" {
-    grep -q 'yesterday' "$SCRIPT"
-}
-
 @test "script creates temp directory with cleanup trap" {
     grep -q "mktemp -d" "$SCRIPT"
     grep -q "trap.*rm -rf.*EXIT" "$SCRIPT"
 }
 
-@test "script uses size threshold for comparison" {
+@test "script uses size threshold for fallback comparison" {
     grep -q "SIZE_THRESHOLD" "$SCRIPT"
     grep -q "gt.*SIZE_THRESHOLD" "$SCRIPT"
 }
@@ -55,23 +55,46 @@ setup() {
     grep -q "rmapi ls" "$SCRIPT"
 }
 
-@test "script searches for yesterday's journal" {
-    grep -q "rmapi find" "$SCRIPT"
+@test "script lists folder contents for scanning" {
+    grep -q "rmapi ls.*REMARKABLE_FOLDER" "$SCRIPT"
 }
 
-@test "script downloads journal for comparison" {
+@test "script downloads journals for inspection" {
     grep -q "rmapi get" "$SCRIPT"
 }
 
-@test "script compares file sizes to threshold" {
-    grep -q "DOWNLOADED_SIZE" "$SCRIPT"
-    grep -q "SIZE_THRESHOLD" "$SCRIPT"
-}
-
-@test "script removes unused journal" {
+@test "script removes unused journals" {
     grep -q "rmapi rm" "$SCRIPT"
 }
 
-@test "script uses stat for file size" {
+@test "script checks for .rm annotation files in ZIP" {
+    grep -q '\.rm' "$SCRIPT"
+    grep -q 'unzip' "$SCRIPT"
+}
+
+@test "script checks ZIP magic bytes for format detection" {
+    grep -q 'head -c2' "$SCRIPT"
+    grep -q '"PK"' "$SCRIPT"
+}
+
+@test "script skips today's journal" {
+    grep -q 'TODAY_DATE' "$SCRIPT"
+    grep -q 'Skip today' "$SCRIPT"
+}
+
+@test "script calculates cutoff date from CLEANUP_KEEP_DAYS" {
+    grep -q 'CUTOFF_DATE' "$SCRIPT"
+    grep -q 'CLEANUP_KEEP_DAYS' "$SCRIPT"
+}
+
+@test "script reports cleanup stats" {
+    grep -q 'checked=.*deleted=.*kept=' "$SCRIPT"
+}
+
+@test "script has check_has_annotations function" {
+    grep -q 'check_has_annotations' "$SCRIPT"
+}
+
+@test "script uses stat for file size in fallback" {
     grep -q "stat" "$SCRIPT"
 }

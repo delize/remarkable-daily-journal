@@ -83,7 +83,7 @@ check_auth() {
 # Export environment variables for cron
 export_env() {
     # Export all REMARKABLE_* and common vars for the cron job
-    env | grep -E '^(REMARKABLE_|DATE_FORMAT|TITLE_FORMAT|TEMPLATE_PAGES|CLEANUP_|SIZE_TOLERANCE|TZ|HOME|PATH)' > /app/.env 2>/dev/null || true
+    env | grep -E '^(REMARKABLE_|DATE_FORMAT|TITLE_FORMAT|TEMPLATE_PAGES|CLEANUP_|SIZE_THRESHOLD|TZ|HOME|PATH)' > /app/.env 2>/dev/null || true
 }
 
 case "${1:-run}" in
@@ -277,7 +277,8 @@ case "${1:-run}" in
         echo ""
         echo "Cleanup settings:"
         echo "  CLEANUP_ENABLED    - Enable cleanup of unused journals (default: true)"
-        echo "  SIZE_THRESHOLD     - Files larger than this (bytes) are kept (default: 8000)"
+        echo "  CLEANUP_KEEP_DAYS  - Days to keep before cleanup eligibility (default: 1)"
+        echo "  SIZE_THRESHOLD     - Fallback size threshold in bytes (default: 25000)"
         exit 1
         ;;
 esac

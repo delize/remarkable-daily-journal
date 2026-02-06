@@ -45,12 +45,14 @@ services:
       - TEMPLATE_PAGES=5
 
       # Cleanup settings for unused journals
-      # Set to "false" to disable cleanup of unused previous day journals
+      # Set to "false" to disable cleanup of unused journals
       - CLEANUP_ENABLED=true
 
-      # Size tolerance (bytes) - if downloaded journal size differs from
-      # blank template by less than this, it's considered unused
-      - SIZE_TOLERANCE=5000
+      # Days to keep journals before they become eligible for cleanup
+      - CLEANUP_KEEP_DAYS=1
+
+      # Fallback size threshold (bytes) for non-ZIP downloads
+      - SIZE_THRESHOLD=25000
 
 # Only needed if using Option A (Docker named volume)
 # Comment out this section if using Option B (bind mount)

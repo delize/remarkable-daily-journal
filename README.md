@@ -10,7 +10,7 @@ Automatically creates dated notebooks on your reMarkable tablet, running as a Do
 - 💾 Persistent authentication (survives container restarts)
 - ⏭️ Skips if notebook for that date already exists
 - 🕐 Timezone-aware scheduling
-- 🧹 Auto-cleanup of unused journals (removes previous day's journal if never written in)
+- 🧹 Auto-cleanup of unused journals (scans and removes unwritten journals)
 
 ## Quick Start
 
@@ -108,28 +108,33 @@ environment:
   - TEMPLATE_PAGES=5
 
   # Cleanup settings
-  # Automatically remove previous day's journal if it was never used
+  # Automatically remove old journals that were never written in
   - CLEANUP_ENABLED=true
 
-  # Size tolerance in bytes - if downloaded journal differs from blank
-  # template by less than this amount, it's considered unused
-  - SIZE_TOLERANCE=5000
+  # Days to keep journals before they become eligible for cleanup
+  - CLEANUP_KEEP_DAYS=1
 ```
 
 ### Cleanup Behavior
 
 When the scheduled job runs (or when you run `run` manually), it will:
 
-1. Check if yesterday's journal exists on reMarkable
-2. Download it and compare to a blank template
-3. If the file size is within `SIZE_TOLERANCE` bytes of the blank template, the journal is considered unused and deleted
-4. If the journal has been written in, the file will be larger and is kept
+1. List all journals in the reMarkable folder
+2. Skip today's journal and any within `CLEANUP_KEEP_DAYS`
+3. Download each older journal and inspect it for handwriting annotations
+4. If the document contains `.rm` annotation files (Remarkable's handwriting format), it's been used and is kept
+5. If no annotations are found, the journal is unused and deleted
 
 This prevents accumulation of empty journal pages while preserving any journals you've actually used.
 
 To disable cleanup:
 ```yaml
 - CLEANUP_ENABLED=false
+```
+
+To keep journals for longer before cleanup (e.g., 7 days):
+```yaml
+- CLEANUP_KEEP_DAYS=7
 ```
 
 ## Authentication Storage
