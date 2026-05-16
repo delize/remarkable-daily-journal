@@ -1,20 +1,17 @@
 # reMarkable Daily Journal Creator
 # Automatically creates dated notebooks on your reMarkable tablet
 
-# Fetch the prebuilt rmapi release binary (ddvk fork)
-FROM alpine:3.19 AS rmapi-fetch
-ARG TARGETARCH
+# Build rmapi from source at a pinned tag (ddvk fork).
+# Static build (CGO_ENABLED=0) so the binary runs on the alpine/musl runtime.
+# The official release tarballs are glibc-linked and will not execute on alpine.
+FROM golang:1.23-alpine AS builder
 ARG RMAPI_VERSION=v0.0.33
-RUN apk add --no-cache curl tar && \
-    case "${TARGETARCH:-amd64}" in \
-      amd64) RMAPI_ARCH=amd64 ;; \
-      arm64) RMAPI_ARCH=arm64 ;; \
-      *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac && \
-    curl -fsSL -o /tmp/rmapi.tar.gz \
-      "https://github.com/ddvk/rmapi/releases/download/${RMAPI_VERSION}/rmapi-linux-${RMAPI_ARCH}.tar.gz" && \
-    tar -xzf /tmp/rmapi.tar.gz -C /tmp && \
-    install -m 0755 /tmp/rmapi /usr/local/bin/rmapi
+RUN apk add --no-cache git && \
+    git clone --depth 1 --branch ${RMAPI_VERSION} https://github.com/ddvk/rmapi.git /src/rmapi && \
+    cd /src/rmapi && \
+    CGO_ENABLED=0 go build \
+      -ldflags "-s -w -X github.com/juruen/rmapi/version.Version=${RMAPI_VERSION}" \
+      -o /go/bin/rmapi .
 
 # Runtime image
 FROM alpine:3.19
@@ -31,8 +28,8 @@ RUN apk add --no-cache \
     ghostscript \
     unzip
 
-# Copy rmapi binary from fetch stage
-COPY --from=rmapi-fetch /usr/local/bin/rmapi /usr/local/bin/rmapi
+# Copy rmapi binary from builder
+COPY --from=builder /go/bin/rmapi /usr/local/bin/rmapi
 
 # Create app user with configurable UID/GID
 RUN addgroup -g ${PGID} app && \
