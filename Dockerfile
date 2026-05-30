@@ -1,11 +1,18 @@
 # reMarkable Daily Journal Creator
 # Automatically creates dated notebooks on your reMarkable tablet
 
-# Build rmapi from source at a pinned tag (ddvk fork).
+# Build rmapi from source (ddvk fork).
 # Static build (CGO_ENABLED=0) so the binary runs on the alpine/musl runtime.
 # The official release tarballs are glibc-linked and will not execute on alpine.
+#
+# Build from `master`, NOT a release tag: the newest tag (v0.0.34) is from
+# May 2024 and predates reMarkable's 2025/2026 cloud sync API change. That
+# change makes older rmapi fail with "failed to mirror was not ok: request
+# failed with status 400". The fixes (ddvk/rmapi #57, #62, #67) only exist on
+# master, untagged. Override RMAPI_VERSION with a commit SHA to pin for
+# reproducibility once a known-good commit is identified.
 FROM golang:1.23-alpine AS builder
-ARG RMAPI_VERSION=v0.0.33
+ARG RMAPI_VERSION=master
 RUN apk add --no-cache git && \
     git clone --depth 1 --branch ${RMAPI_VERSION} https://github.com/ddvk/rmapi.git /src/rmapi && \
     cd /src/rmapi && \
