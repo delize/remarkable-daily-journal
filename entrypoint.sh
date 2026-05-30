@@ -335,6 +335,7 @@ case "${1:-run}" in
         echo "  CLEANUP_KEEP_HOURS - Keep journals modified within this many hours (default: 48)"
         echo "  EMPTY_RM_MAX_BYTES - Page .rm at/below this size counts as empty (default: 1000)"
         echo "  SIZE_THRESHOLD     - Fallback size threshold in bytes (default: 25000)"
+        echo "  CLEANUP_DRY_RUN    - Log deletions without removing anything (default: false)"
         exit 1
         ;;
 esac

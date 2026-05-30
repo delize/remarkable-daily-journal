@@ -18,6 +18,7 @@
 #   CLEANUP_KEEP_DAYS  - Legacy: used to derive KEEP_HOURS when HOURS is unset (default: 2)
 #   EMPTY_RM_MAX_BYTES - A page .rm at/below this size counts as unwritten (default: 1000)
 #   SIZE_THRESHOLD     - Fallback for non-ZIP downloads: files larger than this are kept (default: 25000)
+#   CLEANUP_DRY_RUN    - Set to "true" to log deletions without removing anything (default: false)
 #
 
 set -e
@@ -30,6 +31,7 @@ CLEANUP_KEEP_DAYS="${CLEANUP_KEEP_DAYS:-2}"
 CLEANUP_KEEP_HOURS="${CLEANUP_KEEP_HOURS:-$((CLEANUP_KEEP_DAYS * 24))}"
 EMPTY_RM_MAX_BYTES="${EMPTY_RM_MAX_BYTES:-1000}"
 SIZE_THRESHOLD="${SIZE_THRESHOLD:-25000}"
+CLEANUP_DRY_RUN="${CLEANUP_DRY_RUN:-false}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [cleanup] $*"
@@ -44,15 +46,34 @@ fi
 TODAY_DATE=$(date +"$DATE_FORMAT")
 NOW_EPOCH=$(date +%s)
 
-# Convert an RFC3339 ModifiedClient timestamp (e.g. 2026-05-30T22:17:08Z, with
-# optional fractional seconds) to epoch seconds using busybox date.
+# Convert an RFC3339 UTC ModifiedClient timestamp (e.g. 2026-05-30T22:17:08Z,
+# with optional fractional seconds) to epoch seconds. Pure shell arithmetic so
+# it does not depend on busybox/GNU date flag support. Prints nothing on a
+# malformed input. Uses Howard Hinnant's days_from_civil algorithm.
 mc_to_epoch() {
-    local mc="${1%%.*}"
-    case "$mc" in *Z) ;; *) mc="${mc}Z" ;; esac
-    date -u -D "%Y-%m-%dT%H:%M:%SZ" -d "$mc" +%s 2>/dev/null
+    local s="${1%%.*}"          # drop any fractional seconds
+    s="${s%Z}"                  # drop trailing Z
+    # Expect YYYY-MM-DDTHH:MM:SS
+    case "$s" in
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]) ;;
+        *) return 0 ;;
+    esac
+    local Y=$((10#${s:0:4})) Mo=$((10#${s:5:2})) D=$((10#${s:8:2}))
+    local h=$((10#${s:11:2})) mi=$((10#${s:14:2})) se=$((10#${s:17:2}))
+
+    local y=$Y
+    [ "$Mo" -le 2 ] && y=$((y - 1))
+    local era yoe doy doe days
+    if [ "$y" -ge 0 ]; then era=$((y / 400)); else era=$(((y - 399) / 400)); fi
+    yoe=$((y - era * 400))
+    if [ "$Mo" -gt 2 ]; then doy=$(((153 * (Mo - 3) + 2) / 5 + D - 1)); else doy=$(((153 * (Mo + 9) + 2) / 5 + D - 1)); fi
+    doe=$((yoe * 365 + yoe / 4 - yoe / 100 + doy))
+    days=$((era * 146097 + doe - 719468))
+    echo $((days * 86400 + h * 3600 + mi * 60 + se))
 }
 
 log "Scanning for empty journals not modified in the last ${CLEANUP_KEEP_HOURS}h"
+[ "$CLEANUP_DRY_RUN" = "true" ] && log "DRY RUN enabled: nothing will be deleted"
 
 # Create temp directory for operations
 TEMP_DIR=$(mktemp -d)
@@ -201,6 +222,9 @@ while IFS= read -r line; do
     if check_has_annotations "$DOWNLOADED_FILE"; then
         log "  Journal has writing, keeping"
         KEPT=$((KEPT + 1))
+    elif [ "$CLEANUP_DRY_RUN" = "true" ]; then
+        log "  DRY RUN: would remove empty journal: $DOC_PATH"
+        DELETED=$((DELETED + 1))
     else
         log "  Journal is empty/unwritten, removing: $DOC_PATH"
         if rmapi rm "$DOC_PATH"; then
@@ -215,4 +239,8 @@ while IFS= read -r line; do
     rm -rf "$WORK_DIR"
 done < "$TEMP_DIR/listing.txt"
 
-log "Cleanup complete: checked=$CHECKED deleted=$DELETED kept=$KEPT"
+if [ "$CLEANUP_DRY_RUN" = "true" ]; then
+    log "Cleanup complete (DRY RUN): checked=$CHECKED would-delete=$DELETED kept=$KEPT"
+else
+    log "Cleanup complete: checked=$CHECKED deleted=$DELETED kept=$KEPT"
+fi

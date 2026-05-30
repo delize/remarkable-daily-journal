@@ -63,6 +63,10 @@ services:
       # whose pages are all blank gets cleaned up. Raise if light notes vanish.
       - EMPTY_RM_MAX_BYTES=1000
 
+      # Set to "true" to log what cleanup WOULD delete without removing anything.
+      # Useful for a first run to confirm it only targets empty journals.
+      - CLEANUP_DRY_RUN=false
+
       # Fallback size threshold (bytes) for non-ZIP downloads
       - SIZE_THRESHOLD=25000
 
