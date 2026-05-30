@@ -58,6 +58,7 @@ check_auth() {
 
     # Run rmapi and capture both output and exit code
     output=$(rmapi ls / 2>&1) && exit_code=0 || exit_code=$?
+    LAST_RMAPI_OUTPUT="$output"  # exposed for issue reporting
 
     if [ $exit_code -eq 0 ]; then
         return 0  # Authenticated
@@ -89,8 +90,60 @@ check_auth() {
 
 # Export environment variables for cron
 export_env() {
-    # Export all REMARKABLE_* and common vars for the cron job
-    env | grep -E '^(REMARKABLE_|DATE_FORMAT|TITLE_FORMAT|TEMPLATE_PAGES|CLEANUP_|SIZE_THRESHOLD|TZ|HOME|PATH)' > /app/.env 2>/dev/null || true
+    # Export all REMARKABLE_* and common vars (incl. GitHub reporting) so the
+    # scheduler loop subshell sees them after `source /app/.env`.
+    env | grep -E '^(REMARKABLE_|DATE_FORMAT|TITLE_FORMAT|TEMPLATE_PAGES|CLEANUP_|SIZE_THRESHOLD|TZ|HOME|PATH|GITHUB_|GH_TOKEN)' > /app/.env 2>/dev/null || true
+}
+
+# Fire a health notification (no-op unless github-notify.sh is configured).
+notify() {
+    [ -x /app/github-notify.sh ] || return 0
+    /app/github-notify.sh "$@" || log "WARN: github-notify failed"
+}
+
+# Build a markdown issue body: description + timestamp + the rmapi output.
+notify_body() {
+    printf '%s\n\n- Detected: %s\n- Host: %s\n\nrmapi output:\n```\n%s\n```\n' \
+        "$1" "$(date -u '+%Y-%m-%d %H:%M UTC')" "$(hostname)" "${LAST_RMAPI_OUTPUT:-<none>}"
+}
+
+# One health-check + journal cycle, with notifications. Used at startup and on
+# every scheduled run so failures are reported and recoveries auto-close issues.
+# Returns: 0 = healthy (journal ran), 2 = OOM, 1 = unhealthy.
+cycle() {
+    local rc=0
+    check_auth || rc=$?
+    case "$rc" in
+        0)
+            log "✓ rmapi authentication verified"
+            /app/cleanup-old-journals.sh || log "Cleanup completed (or skipped)"
+            if /app/create-daily-note.sh; then
+                notify ok
+            else
+                log "ERROR: journal creation failed despite a healthy auth check"
+                notify failing error \
+                    "$(notify_body 'Daily journal creation failed even though the rmapi auth/sync check passed. Inspect container logs.')"
+            fi
+            return 0
+            ;;
+        2)
+            # OOM — check_auth already logged the memory guidance.
+            return 2
+            ;;
+        3)
+            log "WARNING: reMarkable cloud API/sync error (e.g. HTTP 400) — see output above."
+            log "If this persists, rebuild so rmapi is built from a current commit."
+            notify failing api \
+                "$(notify_body 'reMarkable cloud API error (HTTP 4xx/5xx or "failed to mirror"). The rmapi sync check failed, so the daily journal cannot run. A 400 here is an API mismatch, not token expiry — rebuild rmapi from a current commit.')"
+            return 1
+            ;;
+        *)
+            log "WARNING: rmapi not authenticated / token problem — re-auth needed."
+            notify failing auth \
+                "$(notify_body 'rmapi reports it is not authenticated (token problem). Re-run the container'\''s auth command to refresh the device token.')"
+            return 1
+            ;;
+    esac
 }
 
 case "${1:-run}" in
@@ -141,54 +194,19 @@ case "${1:-run}" in
             exit 1
         fi
 
-        # Verify authentication works.
-        # Capture the exit code directly (`check_auth || rc=$?`); reading $?
-        # after `if ! check_auth` would yield the negated condition's status,
-        # not check_auth's own return code.
-        log "Verifying rmapi authentication..."
-        auth_result=0
-        check_auth || auth_result=$?
-
-        AUTH_OK=true
-        if [ "$auth_result" -ne 0 ]; then
-            AUTH_OK=false
-            case "$auth_result" in
-                2)
-                    # OOM - error already logged by check_auth. This needs a
-                    # host config change (more memory), so surface it and exit.
-                    exit 1
-                    ;;
-                3)
-                    log "WARNING: reMarkable cloud returned an API/sync error (e.g. HTTP 400)."
-                    log "This is NOT a token-expiry problem. It usually means the bundled rmapi"
-                    log "is too old for the current reMarkable cloud API."
-                    log "Rebuild the image so rmapi is built from a current commit."
-                    ;;
-                *)
-                    log "WARNING: rmapi not authenticated or token expired."
-                    log ""
-                    log "Re-run authentication:"
-                    log "  docker run -it --rm -v /path/to/rmapi:/app/.config/rmapi \\"
-                    log "    ghcr.io/delize/remarkable-daily-journal:latest auth"
-                    ;;
-            esac
-            # Do NOT exit here. With `restart: unless-stopped` an exit would
-            # crash-loop the container, retrying every ~60s and spamming logs.
-            # Instead stay up, skip startup tasks, and retry at the next
-            # scheduled run.
-            log "Skipping startup tasks; will retry at the next scheduled run."
-        else
-            log "✓ rmapi authentication verified"
-        fi
-
-        # Export environment for cron
+        # Export environment first so the scheduler loop subshell and the
+        # health notifier both see it after `source /app/.env`.
         export_env
 
-        # Run cleanup and create on startup (only if auth is currently healthy)
-        if [ "$AUTH_OK" = "true" ]; then
-            log "Running initial cleanup and journal creation on startup..."
-            /app/cleanup-old-journals.sh || log "Startup cleanup completed (or skipped)"
-            /app/create-daily-note.sh || log "Startup note creation completed (or failed)"
+        # Run one health-check + journal cycle now. cycle() reports failures to
+        # GitHub (if configured) and never exits on auth/API errors, so a
+        # transient cloud outage cannot crash-loop the container under
+        # `restart: unless-stopped`. Only OOM (rc=2) is fatal.
+        log "Verifying rmapi authentication and running startup cycle..."
+        startup_rc=0
+        cycle || startup_rc=$?
+        if [ "$startup_rc" -eq 2 ]; then
+            exit 1
         fi
 
         log "Cron job configured. Waiting for schedule..."
@@ -246,8 +264,9 @@ case "${1:-run}" in
             if [ "$MATCH" = "true" ]; then
                 log "Schedule matched! Running daily journal tasks..."
                 source /app/.env 2>/dev/null || true
-                /app/cleanup-old-journals.sh || log "Cleanup completed (or skipped)"
-                /app/create-daily-note.sh || log "Create note completed (or failed)"
+                # cycle() health-checks, runs the journal, and reports/clears
+                # GitHub issues. Never let a failure break the scheduler loop.
+                cycle || true
                 # Sleep 60s to avoid running multiple times in the same minute
                 sleep 60
             fi

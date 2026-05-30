@@ -54,6 +54,16 @@ services:
       # Fallback size threshold (bytes) for non-ZIP downloads
       - SIZE_THRESHOLD=25000
 
+      # --- Health reporting to GitHub Issues (optional) ---
+      # If both are set, the container opens ONE GitHub issue per failure mode
+      # when a run fails (reMarkable cloud/API error, auth/token problem, or a
+      # journal error) and auto-closes it on the next successful run. Leave
+      # unset to disable. The token needs Issues read+write on the repo
+      # (classic PAT: 'repo' scope; fine-grained PAT: Issues: Read and write).
+      # Prefer passing the token via a .env file or Docker secret, not inline.
+      # - GITHUB_REPO=delize/remarkable-daily-journal
+      # - GITHUB_TOKEN=${GITHUB_TOKEN}
+
 # Only needed if using Option A (Docker named volume)
 # Comment out this section if using Option B (bind mount)
 volumes:

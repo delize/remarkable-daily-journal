@@ -33,7 +33,10 @@ RUN apk add --no-cache \
     bash \
     tzdata \
     ghostscript \
-    unzip
+    unzip \
+    curl \
+    jq \
+    ca-certificates
 
 # Copy rmapi binary from builder
 COPY --from=builder /go/bin/rmapi /usr/local/bin/rmapi
@@ -50,6 +53,7 @@ WORKDIR /app
 # Copy scripts
 COPY create-daily-note.sh /app/
 COPY cleanup-old-journals.sh /app/
+COPY github-notify.sh /app/
 COPY entrypoint.sh /app/
 RUN chmod +x /app/*.sh
 
