@@ -92,8 +92,8 @@ open_or_update() {
 }
 
 close_recovered() {
-    local label num
-    local msg="✅ Recovered at $(date -u '+%Y-%m-%d %H:%M UTC') — daily journal ran successfully. Closing automatically."
+    local label num msg
+    msg="✅ Recovered at $(date -u '+%Y-%m-%d %H:%M UTC') — daily journal ran successfully. Closing automatically."
     for label in $FAILURE_LABELS; do
         for num in $(api GET "/issues?state=open&labels=$label&per_page=20" | jq -r '.[].number' 2>/dev/null); do
             api POST "/issues/$num/comments" "$(jq -nc --arg b "$msg" '{body:$b}')" >/dev/null
