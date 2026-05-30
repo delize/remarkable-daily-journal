@@ -1,0 +1,147 @@
+name: reMarkable cloud health check
+
+# Detects reMarkable cloud API / auth breakage that would make the daily
+# journal fail on the NAS. The build/push CI only runs on push and never
+# touches the cloud, so this is a separate scheduled probe.
+#
+# It raises ONE issue per failure mode (keyed by label, so repeated failures
+# update the same issue instead of spawning duplicates) and auto-closes on
+# recovery.
+#
+# Setup required once: add a repo secret RMAPI_CONFIG containing the full
+# contents of your authenticated rmapi.conf (the same file in the NAS's
+# rmapi-config volume at /app/.config/rmapi/rmapi.conf). For example:
+#   gh secret set RMAPI_CONFIG < rmapi.conf
+
+on:
+  schedule:
+    # 06:30 UTC daily. The NAS runs at 06:00 Europe/Stockholm (= 04:00 UTC in
+    # summer / 05:00 UTC in winter), so this probes shortly after and catches a
+    # break the same morning. Adjust if you move the NAS schedule.
+    - cron: '30 6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  API_LABEL: cloud-api-failure
+  AUTH_LABEL: cloud-auth-failure
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build rmapi from master
+        # Must be master, not a release tag: the newest tag (v0.0.34, May 2024)
+        # predates reMarkable's cloud API change and would itself fail with the
+        # 400 we are trying to detect, producing false positives.
+        run: go install github.com/ddvk/rmapi@master
+
+      - name: Write rmapi config from secret
+        env:
+          RMAPI_CONFIG: ${{ secrets.RMAPI_CONFIG }}
+        run: |
+          if [ -z "$RMAPI_CONFIG" ]; then
+            echo "::error::Secret RMAPI_CONFIG is not set. Add the contents of your rmapi.conf under Settings -> Secrets and variables -> Actions (e.g. 'gh secret set RMAPI_CONFIG < rmapi.conf')."
+            exit 1
+          fi
+          mkdir -p "$HOME/.config/rmapi"
+          printf '%s' "$RMAPI_CONFIG" > "$HOME/.config/rmapi/rmapi.conf"
+          chmod 600 "$HOME/.config/rmapi/rmapi.conf"
+
+      - name: Probe reMarkable cloud
+        id: probe
+        run: |
+          # rmapi reads its config from $HOME/.config/rmapi/rmapi.conf (XDG
+          # default), which is where the previous step wrote it.
+          RMAPI="$(go env GOPATH)/bin/rmapi"
+          set +e
+          output=$("$RMAPI" ls / 2>&1)
+          code=$?
+          set -e
+
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          {
+            echo 'output<<RMAPI_EOF'
+            printf '%s\n' "$output"
+            echo 'RMAPI_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$code" -eq 0 ]; then
+            status=ok
+          elif printf '%s' "$output" | grep -qi "failed to mirror\|failed to build documents tree\|request failed with status [45][0-9][0-9]"; then
+            status=api
+          elif printf '%s' "$output" | grep -qi "unauthorized\|not authenticated\|auth"; then
+            status=auth
+          else
+            # Unknown failure: treat as a cloud/API problem rather than swallow it.
+            status=api
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "Probe result: status=$status exit=$code"
+
+      - name: Ensure labels exist
+        run: |
+          gh label create "$API_LABEL"  --color B60205 --description "reMarkable cloud API failure (health check)" 2>/dev/null || true
+          gh label create "$AUTH_LABEL" --color D93F0B --description "reMarkable auth/token failure (health check)" 2>/dev/null || true
+
+      - name: Open or update issue on failure
+        if: steps.probe.outputs.status != 'ok'
+        env:
+          STATUS: ${{ steps.probe.outputs.status }}
+          EXIT_CODE: ${{ steps.probe.outputs.exit_code }}
+          PROBE_OUTPUT: ${{ steps.probe.outputs.output }}
+        run: |
+          if [ "$STATUS" = "auth" ]; then
+            LABEL="$AUTH_LABEL"
+            TITLE="🔴 reMarkable auth/token failure (rmapi) — re-auth needed"
+          else
+            LABEL="$API_LABEL"
+            TITLE="🔴 reMarkable cloud API failure (rmapi) — daily journal at risk"
+          fi
+
+          {
+            echo "The scheduled health check could not reach the reMarkable cloud, so the daily journal on the NAS is likely failing too."
+            echo
+            echo "- Detected: $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo "- Classification: \`$STATUS\`"
+            echo "- rmapi exit code: \`$EXIT_CODE\`"
+            echo
+            echo '```'
+            printf '%s\n' "$PROBE_OUTPUT"
+            echo '```'
+            echo
+            echo "**If \`api\`:** a 400 / \"failed to mirror\" is an API mismatch, not token expiry. Rebuild the image so rmapi is built from a current \`master\`, then on the NAS \`docker compose pull && docker compose up -d --force-recreate\`."
+            echo "**If \`auth\`:** re-run the container's \`auth\` command to refresh the device token, then update the \`RMAPI_CONFIG\` secret."
+            echo
+            echo "_Managed automatically by the health-check workflow: it comments here while the failure persists and closes on recovery._"
+          } > body.md
+
+          num=$(gh issue list --state all --label "$LABEL" --limit 1 --json number --jq '.[0].number // empty')
+          if [ -z "$num" ]; then
+            gh issue create --title "$TITLE" --label "$LABEL" --body-file body.md
+          else
+            state=$(gh issue view "$num" --json state --jq .state)
+            if [ "$state" = "CLOSED" ]; then
+              gh issue reopen "$num"
+            fi
+            gh issue comment "$num" --body-file body.md
+          fi
+
+      - name: Close issues on recovery
+        if: steps.probe.outputs.status == 'ok'
+        run: |
+          for LABEL in "$API_LABEL" "$AUTH_LABEL"; do
+            for num in $(gh issue list --state open --label "$LABEL" --json number --jq '.[].number'); do
+              gh issue comment "$num" --body "✅ Health check passed at $(date -u '+%Y-%m-%d %H:%M UTC') — reMarkable cloud reachable again. Closing automatically."
+              gh issue close "$num"
+            done
+          done
