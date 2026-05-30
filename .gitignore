@@ -28,3 +28,6 @@ tmp/
 # rmapi config (contains auth tokens - never commit)
 .config/
 rmapi.conf
+
+# Generated native notebooks (test + runtime artifacts)
+*.rmdoc

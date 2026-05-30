@@ -4,15 +4,20 @@
 # Removes old journal notebooks that have not been annotated
 #
 # Scans all notebooks in the journal folder, downloads each one older than
-# CLEANUP_KEEP_DAYS, and checks for handwriting annotations (.rm files in the
-# document bundle). Notebooks without annotations are deleted.
+# CLEANUP_KEEP_DAYS, and checks whether anything was written. Native notebooks
+# always contain a .rm layer per page, so presence alone no longer signals use:
+# an UNWRITTEN page's .rm is tiny (the empty scene skeleton, ~400 bytes), while
+# writing on a page makes its .rm grow. A notebook is "used" if any page's .rm
+# exceeds EMPTY_RM_MAX_BYTES; otherwise it is empty and gets deleted.
 #
 # Environment variables:
 #   REMARKABLE_FOLDER  - Target folder on reMarkable (default: /Daily Journal)
 #   DATE_FORMAT        - Date format for filename (default: %Y-%m-%d)
 #   CLEANUP_ENABLED    - Set to "true" to enable cleanup (default: true)
-#   CLEANUP_KEEP_DAYS  - Days to keep journals before cleanup eligibility (default: 1)
-#   SIZE_THRESHOLD     - Fallback for non-ZIP downloads: files larger than this are kept (default: 50000)
+#   CLEANUP_KEEP_HOURS - Keep journals modified within this many hours (default: 48)
+#   CLEANUP_KEEP_DAYS  - Legacy: used to derive KEEP_HOURS when HOURS is unset (default: 2)
+#   EMPTY_RM_MAX_BYTES - A page .rm at/below this size counts as unwritten (default: 1000)
+#   SIZE_THRESHOLD     - Fallback for non-ZIP downloads: files larger than this are kept (default: 25000)
 #
 
 set -e
@@ -21,7 +26,9 @@ set -e
 REMARKABLE_FOLDER="${REMARKABLE_FOLDER:-/Daily Journal}"
 DATE_FORMAT="${DATE_FORMAT:-%Y-%m-%d}"
 CLEANUP_ENABLED="${CLEANUP_ENABLED:-true}"
-CLEANUP_KEEP_DAYS="${CLEANUP_KEEP_DAYS:-1}"
+CLEANUP_KEEP_DAYS="${CLEANUP_KEEP_DAYS:-2}"
+CLEANUP_KEEP_HOURS="${CLEANUP_KEEP_HOURS:-$((CLEANUP_KEEP_DAYS * 24))}"
+EMPTY_RM_MAX_BYTES="${EMPTY_RM_MAX_BYTES:-1000}"
 SIZE_THRESHOLD="${SIZE_THRESHOLD:-25000}"
 
 log() {
@@ -35,12 +42,17 @@ if [ "$CLEANUP_ENABLED" != "true" ]; then
 fi
 
 TODAY_DATE=$(date +"$DATE_FORMAT")
+NOW_EPOCH=$(date +%s)
 
-# Calculate cutoff date - journals on or before this date are candidates
-CUTOFF_TIMESTAMP=$(($(date +%s) - (CLEANUP_KEEP_DAYS * 86400)))
-CUTOFF_DATE=$(date -d "@$CUTOFF_TIMESTAMP" +"$DATE_FORMAT" 2>/dev/null || date -r "$CUTOFF_TIMESTAMP" +"$DATE_FORMAT")
+# Convert an RFC3339 ModifiedClient timestamp (e.g. 2026-05-30T22:17:08Z, with
+# optional fractional seconds) to epoch seconds using busybox date.
+mc_to_epoch() {
+    local mc="${1%%.*}"
+    case "$mc" in *Z) ;; *) mc="${mc}Z" ;; esac
+    date -u -D "%Y-%m-%dT%H:%M:%SZ" -d "$mc" +%s 2>/dev/null
+}
 
-log "Scanning for unused journals on or before $CUTOFF_DATE"
+log "Scanning for empty journals not modified in the last ${CLEANUP_KEEP_HOURS}h"
 
 # Create temp directory for operations
 TEMP_DIR=$(mktemp -d)
@@ -63,19 +75,28 @@ fi
 # Save listing to file to avoid subshell variable scoping issues
 echo "$FOLDER_LISTING" > "$TEMP_DIR/listing.txt"
 
-# Check if a downloaded document has been annotated
-# Returns 0 if annotated (keep), 1 if not annotated (delete)
+# Check if a downloaded document has been written on
+# Returns 0 if written (keep), 1 if empty/unwritten (delete)
 check_has_annotations() {
     local file="$1"
 
-    # Check if it's a ZIP file by magic bytes (ZIP starts with "PK")
+    # Native notebooks (and on-device-annotated PDFs) are ZIP bundles ("PK").
     if [ "$(head -c2 "$file")" = "PK" ]; then
-        # List ZIP contents and look for .rm annotation files
-        # .rm files are Remarkable's annotation layers - one per page with handwriting
-        if unzip -l "$file" 2>/dev/null | grep -q '\.rm$'; then
-            return 0  # Has annotations
+        # Every page carries a .rm layer, so presence is not enough. Compare the
+        # largest .rm layer against EMPTY_RM_MAX_BYTES: an unwritten page is just
+        # the empty scene skeleton (~400 bytes); real strokes make it grow.
+        local max_rm
+        max_rm=$(unzip -l "$file" 2>/dev/null | awk '$NF ~ /\.rm$/ {print $1}' | sort -n | tail -1)
+
+        if [ -z "$max_rm" ]; then
+            return 1  # No .rm layers at all -> nothing written
+        fi
+
+        log "  Largest .rm layer: ${max_rm} bytes (empty threshold: ${EMPTY_RM_MAX_BYTES})"
+        if [ "$max_rm" -gt "$EMPTY_RM_MAX_BYTES" ]; then
+            return 0  # Has writing
         else
-            return 1  # No annotations
+            return 1  # All pages blank
         fi
     fi
 
@@ -123,14 +144,27 @@ while IFS= read -r line; do
         continue
     fi
 
-    # Skip journals newer than cutoff (string comparison works for YYYY-MM-DD)
-    if [ "$DOC_DATE" \> "$CUTOFF_DATE" ]; then
-        continue
+    DOC_PATH="$REMARKABLE_FOLDER/$DOC_NAME"
+
+    # Recency gate: keep journals modified within CLEANUP_KEEP_HOURS, using the
+    # cloud's ModifiedClient (more accurate than the name date - a journal
+    # written in days after it was created stays recent). Skipping these also
+    # avoids downloading them. Falls through to the size check if stat fails.
+    MC=$(rmapi stat "$DOC_PATH" 2>/dev/null | jq -r '.ModifiedClient // empty' 2>/dev/null || true)
+    if [ -n "$MC" ]; then
+        MC_EPOCH=$(mc_to_epoch "$MC")
+        if [ -n "$MC_EPOCH" ]; then
+            AGE_HOURS=$(( (NOW_EPOCH - MC_EPOCH) / 3600 ))
+            if [ "$AGE_HOURS" -lt "$CLEANUP_KEEP_HOURS" ]; then
+                log "Keeping (modified ${AGE_HOURS}h ago < ${CLEANUP_KEEP_HOURS}h): $DOC_NAME"
+                KEPT=$((KEPT + 1))
+                continue
+            fi
+        fi
     fi
 
     CHECKED=$((CHECKED + 1))
-    DOC_PATH="$REMARKABLE_FOLDER/$DOC_NAME"
-    log "Checking: $DOC_NAME"
+    log "Checking: $DOC_NAME (stale, verifying contents)"
 
     # Download the journal to a temp subdirectory
     WORK_DIR="$TEMP_DIR/$DOC_DATE"
@@ -165,10 +199,10 @@ while IFS= read -r line; do
     fi
 
     if check_has_annotations "$DOWNLOADED_FILE"; then
-        log "  Journal has annotations, keeping"
+        log "  Journal has writing, keeping"
         KEPT=$((KEPT + 1))
     else
-        log "  Journal is unused, removing: $DOC_PATH"
+        log "  Journal is empty/unwritten, removing: $DOC_PATH"
         if rmapi rm "$DOC_PATH"; then
             log "  Removed: $DOC_NAME"
             DELETED=$((DELETED + 1))
