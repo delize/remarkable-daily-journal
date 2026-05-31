@@ -14,6 +14,10 @@
 #   JOURNAL_NAME_FORMAT - strftime format for the notebook name; defaults to
 #                       DATE_FORMAT. Add literal text to taste, e.g.
 #                       "Journal %Y-%m-%d" or "%Y-%m-%d - Work".
+#   JOURNAL_NAME      - Literal name override. If set, used verbatim and the
+#                       strftime format is ignored. Handy for ad-hoc test
+#                       uploads (e.g. JOURNAL_NAME=template-fix-test).
+#                       A positional date argument still wins over this.
 #   TEMPLATE_PAGES    - Number of pages (default: 1). Pages added on the device
 #                       inherit the current page's template automatically.
 #   TEMPLATE_STYLE    - Template: blank, lined, grid, checklist, or any raw
@@ -36,10 +40,11 @@ TEMPLATE_PAGES="${TEMPLATE_PAGES:-1}"
 TEMPLATE_STYLE="${TEMPLATE_STYLE:-lined}"
 DRY_RUN="${DRY_RUN:-false}"
 
-# Notebook name from today (or a provided YYYY-MM-DD argument).
-if [ -n "$1" ]; then
+# Notebook name. Priority: positional date arg > JOURNAL_NAME env (literal
+# override, for ad-hoc test uploads) > strftime of today via JOURNAL_NAME_FORMAT.
+if [ -n "${1:-}" ]; then
     JOURNAL_NAME=$(date -d "$1" +"$JOURNAL_NAME_FORMAT")
-else
+elif [ -z "${JOURNAL_NAME:-}" ]; then
     JOURNAL_NAME=$(date +"$JOURNAL_NAME_FORMAT")
 fi
 
