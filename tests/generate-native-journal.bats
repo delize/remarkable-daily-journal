@@ -79,4 +79,11 @@ setup() {
     # Page count and .rm count agree
     [ "$(jq -r '.pageCount' "$dir"/*.content)" -eq 2 ]
     [ "$(find "$dir" -name '*.rm' | wc -l)" -eq 2 ]
+
+    # cPages.lastOpened points at the first page so pages added on the device
+    # inherit its template (xochitl's add-page copies from lastOpened).
+    first_id="$(jq -r '.cPages.pages[0].id' "$dir"/*.content)"
+    [ -n "$first_id" ] && [ "$first_id" != "null" ]
+    [ "$(jq -r '.cPages.lastOpened.value' "$dir"/*.content)" = "$first_id" ]
+    [ "$(jq -r '.cPages.lastOpened.timestamp' "$dir"/*.content)" = "1:1" ]
 }

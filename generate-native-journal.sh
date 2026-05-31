@@ -14,9 +14,10 @@
 #                      blank | lined | grid | checklist  -> mapped below
 #                      anything else is passed through verbatim, so any device
 #                      template works, e.g. TEMPLATE_STYLE="P Dots S"
-#   TEMPLATE_PAGES   number of pages (default: 1). reMarkable applies the
-#                      current page's template to any new page you add on the
-#                      device, so one page is enough — added pages stay templated.
+#   TEMPLATE_PAGES   number of pages (default: 1). The device's "add page"
+#                      action copies the template from cPages.lastOpened (set
+#                      below to the first page), so one page is enough — pages
+#                      added on the device inherit the template.
 #   TEMPLATE_HARDWARE  device whose template list to validate against
 #                      (default: rmpp). Picks assets/templates/<hw>.json, e.g.
 #                      rmpp, rm2, rm1. Validation only warns; never blocks.
@@ -103,9 +104,13 @@ for i in $(seq 1 "$TEMPLATE_PAGES"); do
      }]' <<<"$pages")"
 done
 
-# .content: inject pages + count into the known-good base template.
+# .content: inject pages + count into the known-good base template, and point
+# cPages.lastOpened at the first page so pages added on the device inherit its
+# template (xochitl's add-page copies the template from lastOpened's page).
 jq --argjson pages "$pages" --argjson n "$TEMPLATE_PAGES" \
-  '.cPages.pages = $pages | .pageCount = $n' \
+  '.cPages.pages = $pages
+   | .cPages.lastOpened = { timestamp: "1:1", value: $pages[0].id }
+   | .pageCount = $n' \
   "$BASE_CONTENT" > "$WORK/$DOCID.content"
 
 # .metadata
