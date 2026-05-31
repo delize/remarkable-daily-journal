@@ -1,0 +1,66 @@
+name: Update template lists
+
+# Refresh assets/templates/<hardware>.json (and docs) from the latest reMarkable
+# firmware, then open a PR if anything changed. Runs on the 1st and 15th of each
+# month (~every two weeks) and can be triggered manually.
+#
+# Note: opening the PR needs "Allow GitHub Actions to create and approve pull
+# requests" enabled in the repo's Actions settings.
+
+on:
+  schedule:
+    - cron: '0 6 1,15 * *'
+  workflow_dispatch:
+    inputs:
+      hardware:
+        description: 'Space-separated hardware codes to refresh (e.g. "rmpp rm2 rm1")'
+        required: false
+        default: 'rmpp rm2'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-templates:
+    name: Refresh templates from latest firmware
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install codexctl
+        run: pip install codexctl
+
+      - name: Refresh template lists
+        run: |
+          chmod +x scripts/*.sh
+          HARDWARE="${{ github.event.inputs.hardware || 'rmpp rm2' }}"
+          for hw in $HARDWARE; do
+            echo "::group::$hw"
+            ./scripts/update-templates.sh --hardware "$hw" || echo "WARN: $hw refresh failed"
+            echo "::endgroup::"
+          done
+
+      - name: Open PR if templates changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/update-templates
+          title: 'chore: refresh reMarkable template lists'
+          commit-message: 'chore: refresh template lists from latest firmware'
+          body: |
+            Automated refresh of `assets/templates/<hardware>.json` and the
+            matching `docs/templates/<hardware>.md` from the latest reMarkable
+            firmware (via codexctl).
+
+            Review the diff for added/removed/renamed templates before merging —
+            new template names become valid `TEMPLATE_STYLE` values.
+          add-paths: |
+            assets/templates/
+            docs/templates/
+          delete-branch: true

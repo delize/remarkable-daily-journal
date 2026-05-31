@@ -17,6 +17,9 @@
 #   TEMPLATE_PAGES   number of pages (default: 1). reMarkable applies the
 #                      current page's template to any new page you add on the
 #                      device, so one page is enough — added pages stay templated.
+#   TEMPLATE_HARDWARE  device whose template list to validate against
+#                      (default: rmpp). Picks assets/templates/<hw>.json, e.g.
+#                      rmpp, rm2, rm1. Validation only warns; never blocks.
 #   JOURNAL_NAME     notebook visibleName (default: today's date, YYYY-MM-DD)
 #   OUTPUT_FILE      output .rmdoc path (default: ./<JOURNAL_NAME>.rmdoc)
 set -euo pipefail
@@ -24,6 +27,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STENCIL="${STENCIL:-$SCRIPT_DIR/assets/blank-page.rm}"
 BASE_CONTENT="${BASE_CONTENT:-$SCRIPT_DIR/assets/base.content.json}"
+TEMPLATE_HARDWARE="${TEMPLATE_HARDWARE:-rmpp}"
+TEMPLATES_JSON="${TEMPLATES_JSON:-$SCRIPT_DIR/assets/templates/${TEMPLATE_HARDWARE}.json}"
 
 TEMPLATE_STYLE="${TEMPLATE_STYLE:-lined}"
 TEMPLATE_PAGES="${TEMPLATE_PAGES:-1}"
@@ -45,6 +50,19 @@ for dep in jq zip; do
 done
 [ -f "$STENCIL" ] || { echo "ERROR: stencil not found: $STENCIL" >&2; exit 1; }
 [ -f "$BASE_CONTENT" ] || { echo "ERROR: base content not found: $BASE_CONTENT" >&2; exit 1; }
+
+# Validate the requested template against the known list (assets/templates.json).
+# This never blocks: firmware sets vary, so an unrecognised name may still be a
+# real template on the device. We only warn so typos are noticed.
+if [ -f "$TEMPLATES_JSON" ]; then
+  if jq -e --arg t "$RM_TEMPLATE" 'any(.templates[]; .filename == $t)' "$TEMPLATES_JSON" >/dev/null 2>&1; then
+    : # known template
+  else
+    echo "WARNING: template '$RM_TEMPLATE' is not in $TEMPLATES_JSON." >&2
+    echo "         Using it anyway; if the device lacks it the page renders blank." >&2
+    echo "         See docs/templates/${TEMPLATE_HARDWARE}.md for valid template names." >&2
+  fi
+fi
 
 gen_uuid() {
   if command -v uuidgen >/dev/null 2>&1; then
