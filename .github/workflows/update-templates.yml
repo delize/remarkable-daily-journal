@@ -15,7 +15,7 @@ on:
       hardware:
         description: 'Space-separated hardware codes to refresh (e.g. "rmpp rm2 rm1")'
         required: false
-        default: 'rmpp rm2'
+        default: 'rmpp rmppm rm2 rm1'
 
 permissions:
   contents: write
@@ -40,7 +40,7 @@ jobs:
       - name: Refresh template lists
         run: |
           chmod +x scripts/*.sh
-          HARDWARE="${{ github.event.inputs.hardware || 'rmpp rm2' }}"
+          HARDWARE="${{ github.event.inputs.hardware || 'rmpp rmppm rm2 rm1' }}"
           for hw in $HARDWARE; do
             echo "::group::$hw"
             ./scripts/update-templates.sh --hardware "$hw" || echo "WARN: $hw refresh failed"
