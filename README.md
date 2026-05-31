@@ -114,14 +114,19 @@ environment:
   # at page 1, and the device's add-page action copies that page's template.
   - TEMPLATE_PAGES=1
 
-  # Cleanup: remove old journals that were never written in
+  # Cleanup: remove recent journals that were never written in. Journals older
+  # than CLEANUP_KEEP_HOURS are considered settled and never touched.
   - CLEANUP_ENABLED=true
 
-  # Keep journals modified within this many hours (cloud ModifiedClient time)
+  # Only inspect journals modified within this many hours (cloud ModifiedClient)
   - CLEANUP_KEEP_HOURS=48
 
   # A page .rm at/below this size (bytes) counts as unwritten
   - EMPTY_RM_MAX_BYTES=1000
+
+  # Skip the download if the cloud bundle is already this big — anything past
+  # ~50KB has strokes.
+  - EMPTY_BUNDLE_MAX_BYTES=50000
 
   # Log what cleanup would delete without removing anything
   - CLEANUP_DRY_RUN=false
@@ -194,17 +199,28 @@ fix.
 ### Cleanup Behavior
 
 Native notebooks always contain a `.rm` layer per page, so "has a `.rm` file"
-no longer means "written in". Instead, a journal is removed only when it is
-**both** stale and empty:
+no longer means "written in". The cleanup pass only ever touches **recent,
+auto-generated, never-written-in** journals; anything older than the window is
+left alone forever:
 
 1. List all journals in the reMarkable folder
-2. Keep today's journal and any modified within `CLEANUP_KEEP_HOURS` (using the
-   cloud's `ModifiedClient` time — so a journal you wrote in days later stays)
-3. For older (stale) journals, download and check the largest page `.rm`:
+2. Skip today's journal
+3. **Skip any journal older than `CLEANUP_KEEP_HOURS`** (using the cloud's
+   `ModifiedClient` time). Once a journal is past the window it is considered
+   settled — never downloaded, never deleted.
+4. For in-window journals, try cheap short-circuits before downloading:
+   - **Cache**: a persistent `{name → ModifiedClient}` cache (at
+     `CLEANUP_CACHE`, defaulting to `/app/.config/rmapi/cleanup-cache.tsv`)
+     records every journal we've already verified as written-on. If the cache
+     hit's `ModifiedClient` matches today's, skip the download.
+   - **Cloud size**: if `rmapi stat`'s `sizeInBytes` is above
+     `EMPTY_BUNDLE_MAX_BYTES` (default 50000), treat as written-on and skip.
+5. Only journals that survived the short-circuits get downloaded. Check the
+   largest page `.rm`:
    - an unwritten page is just the empty scene skeleton (~409 bytes)
    - writing on a page makes its `.rm` grow (typically 2600+ bytes)
-4. If every page is at/below `EMPTY_RM_MAX_BYTES`, the journal is empty → deleted;
-   otherwise it has writing → kept
+6. If every page is at/below `EMPTY_RM_MAX_BYTES`, the journal is empty → deleted;
+   otherwise it has writing → cached and kept.
 
 To preview without deleting, set `CLEANUP_DRY_RUN=true` for one run and watch the
 log. To disable cleanup entirely:
@@ -212,7 +228,8 @@ log. To disable cleanup entirely:
 - CLEANUP_ENABLED=false
 ```
 
-To keep journals longer before they're eligible (e.g., 7 days):
+To widen the deletion window (e.g., 7 days — anything still empty after a week
+gets cleaned up):
 ```yaml
 - CLEANUP_KEEP_HOURS=168
 ```
