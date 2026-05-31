@@ -34,13 +34,9 @@ services:
       # reMarkable folder to store daily journals
       - REMARKABLE_FOLDER=/Daily Journal
       
-      # Date format for the notebook filename
+      # Date format for the notebook name
       - DATE_FORMAT=%Y-%m-%d
-      
-      # Date format for the display title
-      # %A = weekday, %B = month, %d = day, %Y = year
-      - TITLE_FORMAT=%A, %B %d, %Y
-      
+
       # Pages per notebook. 1 is enough: pages you add on the device inherit
       # the current page's template automatically.
       - TEMPLATE_PAGES=1
