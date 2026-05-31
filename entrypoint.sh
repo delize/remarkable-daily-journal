@@ -327,6 +327,7 @@ case "${1:-run}" in
         echo "  TEMPLATE_PAGES     - Pages per notebook (default: 1)"
         echo "  TEMPLATE_STYLE     - Template: blank, lined, grid, checklist, or a"
         echo "                       raw reMarkable template name (default: lined)"
+        echo "  TEMPLATE_HARDWARE  - Device list to validate against: rmpp/rm2/rm1 (default: rmpp)"
         echo "  CRON_SCHEDULE      - Cron expression (default: 0 6 * * *)"
         echo "  TZ                 - Timezone (default: UTC)"
         echo ""

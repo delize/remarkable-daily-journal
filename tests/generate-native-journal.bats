@@ -32,6 +32,22 @@ setup() {
     grep -q 'P Checklist' "$SCRIPT"
 }
 
+@test "script validates the template against a per-hardware list" {
+    grep -q 'TEMPLATE_HARDWARE' "$SCRIPT"
+    grep -q 'TEMPLATES_JSON' "$SCRIPT"
+}
+
+@test "warns on an unknown template but still generates" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    out="$BATS_TEST_TMPDIR/unknown.rmdoc"
+    run env TEMPLATE_STYLE="Definitely Not A Template" TEMPLATE_PAGES=1 \
+        JOURNAL_NAME=unknown OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [ -f "$out" ]
+    echo "$output" | grep -q 'WARNING'
+}
+
 @test "script generates a fresh document UUID" {
     grep -q 'gen_uuid' "$SCRIPT"
 }
