@@ -5,12 +5,15 @@ Automatically creates dated notebooks on your reMarkable tablet, running as a Do
 ## Features
 
 - 📅 Creates a new dated notebook every day
+- 📝 **Native reMarkable notebooks** using the device's own built-in templates (lined, grid, dots, …) — no PDF generation
+- 🎛️ Configurable template per page, including any of the device's ~70 templates, with per-hardware support
 - 🔄 Runs on a configurable schedule (default: 6:00 AM)
 - 🐳 Runs as a lightweight Docker container
 - 💾 Persistent authentication (survives container restarts)
 - ⏭️ Skips if notebook for that date already exists
 - 🕐 Timezone-aware scheduling
-- 🧹 Auto-cleanup of unused journals (scans and removes unwritten journals)
+- 🧹 Auto-cleanup of unused journals (removes ones that are stale **and** unwritten)
+- 🤖 Template list kept up to date automatically from the latest firmware
 
 ## Quick Start
 
@@ -97,44 +100,121 @@ environment:
   # Folder on reMarkable (created automatically)
   - REMARKABLE_FOLDER=/Daily Journal
   
-  # Filename format (ISO date recommended for sorting)
+  # Notebook name format (ISO date recommended for sorting)
   - DATE_FORMAT=%Y-%m-%d
-  
-  # Display title format
-  # %A = weekday name, %B = month name, %d = day, %Y = year
-  - TITLE_FORMAT=%A, %B %d, %Y
-  
-  # Pages per notebook
-  - TEMPLATE_PAGES=5
 
-  # Cleanup settings
-  # Automatically remove old journals that were never written in
+  # Template applied to each page (see "Templates" below).
+  # Aliases: blank, lined, grid, checklist — or any raw template name.
+  - TEMPLATE_STYLE=lined
+
+  # Device whose template list to validate against: rmpp / rm2 / rm1
+  - TEMPLATE_HARDWARE=rmpp
+
+  # Pages per notebook. 1 is enough — pages you add on the device inherit
+  # the current page's template automatically.
+  - TEMPLATE_PAGES=1
+
+  # Cleanup: remove old journals that were never written in
   - CLEANUP_ENABLED=true
 
-  # Days to keep journals before they become eligible for cleanup
-  - CLEANUP_KEEP_DAYS=1
+  # Keep journals modified within this many hours (cloud ModifiedClient time)
+  - CLEANUP_KEEP_HOURS=48
+
+  # A page .rm at/below this size (bytes) counts as unwritten
+  - EMPTY_RM_MAX_BYTES=1000
+
+  # Log what cleanup would delete without removing anything
+  - CLEANUP_DRY_RUN=false
 ```
+
+### Templates
+
+Journals are **native reMarkable notebooks** that reference one of the device's
+built-in templates by name — the tablet renders the template itself, so there's
+no PDF and nothing template-related is uploaded.
+
+Set `TEMPLATE_STYLE` to a friendly alias or any raw template name:
+
+| Alias | Template |
+|-------|----------|
+| `blank` | `Blank` |
+| `lined` | `P Lines medium` |
+| `grid` | `P Grid medium` |
+| `checklist` | `P Checklist` |
+
+```yaml
+- TEMPLATE_STYLE=lined        # alias
+- TEMPLATE_STYLE=P Dots S     # any raw template name works too
+```
+
+The four aliases are just shortcuts for the most common picks — **all ~70
+device templates are usable**, including dotted, Cornell, hexagon, music,
+margin, planners, storyboards, and more.
+
+**To choose one, browse the mapping** in
+[`docs/templates/`](docs/templates/) (e.g. [`rmpp.md`](docs/templates/rmpp.md)
+for the Paper Pro). Each entry lists the template's display **Name**, the
+**value to put in `TEMPLATE_STYLE`**, and its category — find the one you want
+and copy its template value verbatim (spaces and capitalisation matter, e.g.
+`P Dots S`, `P Cornell`, `P Hexagon medium`).
+
+An unrecognised name is still used (it just logs a warning), since template sets
+differ by device/firmware. Set `TEMPLATE_HARDWARE` (`rmpp`, `rm2`, `rm1`) to
+validate against your device's list.
+
+These lists are refreshed automatically from the latest firmware by the
+`Update template lists` workflow (every ~2 weeks), which opens a PR when the set
+changes.
+
+#### Different reMarkable models / screen sizes
+
+The blank-page stencil (`assets/blank-page.rm`) and base `.content`
+(`assets/base.content.json`) were captured from a **reMarkable Paper Pro**, and
+generation is **verified on the Paper Pro**. Two things are worth separating:
+
+- **Document geometry** — the `.rm`/`.content` use reMarkable's canonical
+  document canvas (1404 × 1872). Notably, the Paper Pro's *own* notebooks use
+  this same canvas despite its larger, color screen — evidence that the
+  stroke/page coordinate space is **device-independent**, so one stencil +
+  `.content` very likely works across models. (`.metadata` is just document
+  metadata — no geometry.)
+- **Template rendering** — reMarkable ships **device-specific** template assets
+  rather than scaling one design to every screen
+  ([source](https://spacepanda.se/articles/rm_methods.html)). But we never ship
+  a template; we reference it by *name* and the device draws its own asset. So
+  the only per-device variable is which template **names** exist — covered by
+  `TEMPLATE_HARDWARE` and the lists in `docs/templates/`.
+
+Net: per-device `.rm`/`.content` are most likely **unnecessary**; only
+template-name availability differs. This is inferred from the Paper Pro using
+the canonical canvas and is **not yet tested on a physical reMarkable 1/2** — if
+a journal mis-renders there, capturing that device's blank stencil would be the
+fix.
 
 ### Cleanup Behavior
 
-When the scheduled job runs (or when you run `run` manually), it will:
+Native notebooks always contain a `.rm` layer per page, so "has a `.rm` file"
+no longer means "written in". Instead, a journal is removed only when it is
+**both** stale and empty:
 
 1. List all journals in the reMarkable folder
-2. Skip today's journal and any within `CLEANUP_KEEP_DAYS`
-3. Download each older journal and inspect it for handwriting annotations
-4. If the document contains `.rm` annotation files (Remarkable's handwriting format), it's been used and is kept
-5. If no annotations are found, the journal is unused and deleted
+2. Keep today's journal and any modified within `CLEANUP_KEEP_HOURS` (using the
+   cloud's `ModifiedClient` time — so a journal you wrote in days later stays)
+3. For older (stale) journals, download and check the largest page `.rm`:
+   - an unwritten page is just the empty scene skeleton (~409 bytes)
+   - writing on a page makes its `.rm` grow (typically 2600+ bytes)
+4. If every page is at/below `EMPTY_RM_MAX_BYTES`, the journal is empty → deleted;
+   otherwise it has writing → kept
 
-This prevents accumulation of empty journal pages while preserving any journals you've actually used.
-
-To disable cleanup:
+To preview without deleting, set `CLEANUP_DRY_RUN=true` for one run and watch the
+log. To disable cleanup entirely:
 ```yaml
 - CLEANUP_ENABLED=false
 ```
 
-To keep journals for longer before cleanup (e.g., 7 days):
+To keep journals longer before they're eligible (e.g., 7 days):
 ```yaml
-- CLEANUP_KEEP_DAYS=7
+- CLEANUP_KEEP_HOURS=168
 ```
 
 ## Authentication Storage
@@ -237,16 +317,21 @@ Import the `docker-compose.yml` as a stack in Portainer.
 
 ## Notebook Naming
 
-Notebooks are created with this naming pattern:
+By default each notebook is named by `DATE_FORMAT` (ISO date), e.g. `2026-05-31`.
 
-```
-2025-02-01 - Sunday, February 01, 2025
+To customise the name — append or prepend text — set `JOURNAL_NAME_FORMAT`, a
+strftime format that **defaults to `DATE_FORMAT`**:
+
+```yaml
+- JOURNAL_NAME_FORMAT=Journal %Y-%m-%d     # -> "Journal 2026-05-31"
+- JOURNAL_NAME_FORMAT=%Y-%m-%d - Work      # -> "2026-05-31 - Work"
+- JOURNAL_NAME_FORMAT=%A %Y-%m-%d          # -> "Sunday 2026-05-31"
 ```
 
-This format:
-- Sorts chronologically in reMarkable's file list
-- Shows the full date at a glance
-- Works well with Obsidian daily notes if you're syncing
+The **folder** is set separately with `REMARKABLE_FOLDER` (default `/Daily Journal`).
+
+Keep the date first to sort chronologically, and keep an ISO date (`%Y-%m-%d`)
+somewhere in the name — the cleanup job finds journals by matching `YYYY-MM-DD`.
 
 ## Troubleshooting
 
@@ -300,19 +385,27 @@ rmapi ls "/Daily Journal"
 .
 ├── .github/
 │   └── workflows/
-│       └── ci.yml              # Full CI/CD pipeline
-├── tests/
-│   ├── create-daily-note.bats  # Tests for create-daily-note.sh
-│   ├── cleanup-old-journals.bats # Tests for cleanup-old-journals.sh
-│   ├── entrypoint.bats         # Tests for entrypoint.sh
-│   └── run-tests.sh            # Local test runner
-├── Dockerfile                  # Multi-stage build with rmapi
-├── docker-compose.yml          # Service definition
-├── create-daily-note.sh        # Creates daily journal notebooks
-├── cleanup-old-journals.sh     # Removes unused previous day journals
-├── entrypoint.sh               # Container entrypoint
-├── .gitignore                  # Git ignore patterns
-└── README.md                   # This file
+│       ├── ci.yml                  # Lint, test, build & push image
+│       └── update-templates.yml    # Biweekly template-list refresh from firmware
+├── assets/
+│   ├── blank-page.rm               # Blank v6 page stencil cloned per page
+│   ├── base.content.json           # Known-good .content template
+│   └── templates/
+│       └── rmpp.json               # Canonical template list (per hardware)
+├── docs/
+│   └── templates/
+│       └── rmpp.md                 # Human-readable template reference (generated)
+├── scripts/
+│   ├── generate-template-docs.sh   # Render docs/templates/<hw>.md from the JSON
+│   └── update-templates.sh         # Refresh a hardware's list from latest firmware
+├── tests/                          # Bats tests (one per script) + run-tests.sh
+├── Dockerfile                      # Multi-stage build with rmapi
+├── docker-compose.yml              # Service definition
+├── create-daily-note.sh            # Builds + uploads the daily journal
+├── generate-native-journal.sh      # Builds the native .rmdoc bundle
+├── cleanup-old-journals.sh         # Removes stale, unwritten journals
+├── entrypoint.sh                   # Container entrypoint
+└── README.md                       # This file
 ```
 
 ## Development
@@ -342,26 +435,30 @@ The GitHub Actions workflow (`ci.yml`) runs automatically on push/PR:
 ```
 Stage 1: Lint          → Shellcheck + Bash syntax validation
     ↓
-Stage 2: Unit Tests    → Bats test suite with mocked dependencies
+Stage 2: Unit Tests    → Bats test suite
     ↓
 Stage 3: Docker Build  → Build image + integration tests (dry run)
     ↓
-Stage 4: Push          → Multi-arch build (amd64 + arm64) → GHCR
+Stage 4: Push          → Build (amd64) → GHCR (latest + version tags)
 ```
 
 Push stage only runs on `main` branch and version tags, not on PRs.
 
+A second workflow (`update-templates.yml`) runs on a schedule (~every two weeks)
+to refresh the per-hardware template lists from the latest firmware and open a
+PR when they change. It can also be triggered manually from the Actions tab.
+
 ## How It Works
 
 1. **Build stage**: Compiles `rmapi` from the [ddvk/rmapi](https://github.com/ddvk/rmapi) fork (actively maintained)
-2. **Runtime**: Alpine Linux with ghostscript for PDF generation
+2. **Runtime**: Alpine Linux. Each journal is assembled as a native reMarkable `.rmdoc` bundle — a fresh document UUID, pages cloning a blank v6 `.rm` stencil, with the chosen built-in template referenced in `.content` — then uploaded with `rmapi`. The device renders the template, so no PDF/Ghostscript is involved.
 3. **Scheduling**: Uses a lightweight shell-based scheduler (no root required)
 4. **Auth storage**: Persisted in Docker volume, survives container updates
 
 ## Contributing
 
 Feel free to open issues or PRs for:
-- Custom template support (lined, dotted, etc.)
 - Multiple folder support
 - Weekly/monthly notebook options
+- Per-page mixed templates
 - Integration with other note systems

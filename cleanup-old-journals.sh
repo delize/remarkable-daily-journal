@@ -153,8 +153,9 @@ while IFS= read -r line; do
         continue
     fi
 
-    # Extract date from document name (expects YYYY-MM-DD at the start)
-    DOC_DATE=$(echo "$DOC_NAME" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}' || true)
+    # Extract the ISO date from the document name (anywhere — the name may have
+    # a custom prefix/suffix via JOURNAL_NAME_FORMAT, e.g. "Journal 2026-05-31").
+    DOC_DATE=$(echo "$DOC_NAME" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1 || true)
 
     if [ -z "$DOC_DATE" ]; then
         continue
