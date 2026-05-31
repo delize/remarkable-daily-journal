@@ -317,18 +317,21 @@ Import the `docker-compose.yml` as a stack in Portainer.
 
 ## Notebook Naming
 
-Each notebook is named by `DATE_FORMAT` (default ISO date):
+By default each notebook is named by `DATE_FORMAT` (ISO date), e.g. `2026-05-31`.
 
+To customise the name — append or prepend text — set `JOURNAL_NAME_FORMAT`, a
+strftime format that **defaults to `DATE_FORMAT`**:
+
+```yaml
+- JOURNAL_NAME_FORMAT=Journal %Y-%m-%d     # -> "Journal 2026-05-31"
+- JOURNAL_NAME_FORMAT=%Y-%m-%d - Work      # -> "2026-05-31 - Work"
+- JOURNAL_NAME_FORMAT=%A %Y-%m-%d          # -> "Sunday 2026-05-31"
 ```
-2026-05-31
-```
 
-This format:
-- Sorts chronologically in reMarkable's file list
-- Is what the cleanup job matches on (`YYYY-MM-DD`)
-- Works well with Obsidian daily notes if you're syncing
+The **folder** is set separately with `REMARKABLE_FOLDER` (default `/Daily Journal`).
 
-Change the pattern with `DATE_FORMAT` (e.g. `%Y-%m-%d` → `2026-05-31`).
+Keep the date first to sort chronologically, and keep an ISO date (`%Y-%m-%d`)
+somewhere in the name — the cleanup job finds journals by matching `YYYY-MM-DD`.
 
 ## Troubleshooting
 

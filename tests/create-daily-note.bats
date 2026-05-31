@@ -53,8 +53,9 @@ setup() {
     grep -q "rmapi mkdir" "$SCRIPT"
 }
 
-@test "script checks for existing notebook" {
-    grep -q "rmapi find" "$SCRIPT"
+@test "script checks for an existing notebook by name" {
+    grep -q 'rmapi ls "\$REMARKABLE_FOLDER"' "$SCRIPT"
+    grep -q 'already exists' "$SCRIPT"
 }
 
 @test "script uploads the notebook to reMarkable" {
@@ -63,4 +64,16 @@ setup() {
 
 @test "script supports custom date argument" {
     grep -q 'if \[ -n "\$1" \]' "$SCRIPT"
+}
+
+@test "script supports a configurable notebook name" {
+    grep -q 'JOURNAL_NAME_FORMAT' "$SCRIPT"
+}
+
+@test "honors JOURNAL_NAME_FORMAT in a dry run" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    run env DRY_RUN=true JOURNAL_NAME_FORMAT="Journal %Y-%m-%d" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "Journal "
 }

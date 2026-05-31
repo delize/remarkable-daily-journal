@@ -37,6 +37,11 @@ services:
       # Date format for the notebook name
       - DATE_FORMAT=%Y-%m-%d
 
+      # Notebook name (strftime). Defaults to DATE_FORMAT. Add text to taste,
+      # e.g. "Journal %Y-%m-%d" or "%Y-%m-%d - Work". Keep an ISO date in it so
+      # cleanup can recognise journals.
+      # - JOURNAL_NAME_FORMAT=%Y-%m-%d
+
       # Pages per notebook. 1 is enough: pages you add on the device inherit
       # the current page's template automatically.
       - TEMPLATE_PAGES=1

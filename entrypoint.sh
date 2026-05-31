@@ -92,7 +92,7 @@ check_auth() {
 export_env() {
     # Export all REMARKABLE_* and common vars (incl. GitHub reporting) so the
     # scheduler loop subshell sees them after `source /app/.env`.
-    env | grep -E '^(REMARKABLE_|DATE_FORMAT|TEMPLATE_|CLEANUP_|EMPTY_RM_MAX_BYTES|SIZE_THRESHOLD|TZ|HOME|PATH|GITHUB_|GH_TOKEN)' > /app/.env 2>/dev/null || true
+    env | grep -E '^(REMARKABLE_|DATE_FORMAT|JOURNAL_|TEMPLATE_|CLEANUP_|EMPTY_RM_MAX_BYTES|SIZE_THRESHOLD|TZ|HOME|PATH|GITHUB_|GH_TOKEN)' > /app/.env 2>/dev/null || true
 }
 
 # Fire a health notification (no-op unless github-notify.sh is configured).
