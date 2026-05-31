@@ -169,21 +169,27 @@ changes.
 #### Different reMarkable models / screen sizes
 
 The blank-page stencil (`assets/blank-page.rm`) and base `.content`
-(`assets/base.content.json`) shipped here were captured from a **reMarkable
-Paper Pro**, and journal generation is **verified on the Paper Pro**.
+(`assets/base.content.json`) were captured from a **reMarkable Paper Pro**, and
+generation is **verified on the Paper Pro**. Two things are worth separating:
 
-Templates are referenced by *name*; the device supplies the actual template
-asset. Note that reMarkable ships **device-specific** template files rather than
-scaling one design to every screen size
-([source](https://spacepanda.se/articles/rm_methods.html)), and page geometry
-can differ by model. So on **other models (reMarkable 1/2) generation is
-untested** and a journal may not be laid out correctly.
+- **Document geometry** — the `.rm`/`.content` use reMarkable's canonical
+  document canvas (1404 × 1872). Notably, the Paper Pro's *own* notebooks use
+  this same canvas despite its larger, color screen — evidence that the
+  stroke/page coordinate space is **device-independent**, so one stencil +
+  `.content` very likely works across models. (`.metadata` is just document
+  metadata — no geometry.)
+- **Template rendering** — reMarkable ships **device-specific** template assets
+  rather than scaling one design to every screen
+  ([source](https://spacepanda.se/articles/rm_methods.html)). But we never ship
+  a template; we reference it by *name* and the device draws its own asset. So
+  the only per-device variable is which template **names** exist — covered by
+  `TEMPLATE_HARDWARE` and the lists in `docs/templates/`.
 
-`TEMPLATE_HARDWARE` and the per-device lists in `docs/templates/` cover which
-template *names* are valid on each device — **not** page geometry. Full
-per-device support would also need a blank stencil + base `.content` captured
-from a notebook on that device (these are notebook artifacts and can't be pulled
-from firmware the way the template name lists can). Contributions welcome.
+Net: per-device `.rm`/`.content` are most likely **unnecessary**; only
+template-name availability differs. This is inferred from the Paper Pro using
+the canonical canvas and is **not yet tested on a physical reMarkable 1/2** — if
+a journal mis-renders there, capturing that device's blank stencil would be the
+fix.
 
 ### Cleanup Behavior
 
