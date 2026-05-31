@@ -1,24 +1,39 @@
 #!/bin/bash
 #
 # cleanup-old-journals.sh
-# Removes old journal notebooks that have not been annotated
+# Removes recently-generated daily journals that never got written in.
 #
-# Scans all notebooks in the journal folder, downloads each one older than
-# CLEANUP_KEEP_DAYS, and checks whether anything was written. Native notebooks
-# always contain a .rm layer per page, so presence alone no longer signals use:
-# an UNWRITTEN page's .rm is tiny (the empty scene skeleton, ~400 bytes), while
-# writing on a page makes its .rm grow. A notebook is "used" if any page's .rm
-# exceeds EMPTY_RM_MAX_BYTES; otherwise it is empty and gets deleted.
+# Policy: a journal is only a deletion candidate while it is YOUNGER than
+# CLEANUP_KEEP_HOURS (default 48h). Anything older than the window is
+# considered settled and is skipped entirely — no download, no inspection,
+# never deleted. This guarantees that once a daily journal survives past the
+# window it stays forever, and the cleanup pass only touches the most recent
+# auto-generated empty ones.
+#
+# For each in-window journal we download the bundle and check whether any
+# page was written on. Native notebooks always contain a .rm layer per page,
+# so presence alone is not enough: an UNWRITTEN page's .rm is tiny (the empty
+# scene skeleton, ~400 bytes), while writing on a page makes it grow. A page
+# .rm larger than EMPTY_RM_MAX_BYTES counts as written; otherwise the
+# notebook is empty and gets deleted.
 #
 # Environment variables:
 #   REMARKABLE_FOLDER  - Target folder on reMarkable (default: /Daily Journal)
 #   DATE_FORMAT        - Date format for filename (default: %Y-%m-%d)
 #   CLEANUP_ENABLED    - Set to "true" to enable cleanup (default: true)
-#   CLEANUP_KEEP_HOURS - Keep journals modified within this many hours (default: 48)
+#   CLEANUP_KEEP_HOURS - Only inspect journals modified within this many hours;
+#                        anything older is left alone (default: 48)
 #   CLEANUP_KEEP_DAYS  - Legacy: used to derive KEEP_HOURS when HOURS is unset (default: 2)
 #   EMPTY_RM_MAX_BYTES - A page .rm at/below this size counts as unwritten (default: 1000)
+#   EMPTY_BUNDLE_MAX_BYTES - If the cloud's sizeInBytes is above this, skip the
+#                        download and treat the journal as written-on (default: 50000)
 #   SIZE_THRESHOLD     - Fallback for non-ZIP downloads: files larger than this are kept (default: 25000)
 #   CLEANUP_DRY_RUN    - Set to "true" to log deletions without removing anything (default: false)
+#   CLEANUP_CACHE      - Path to a persistent tsv ({name}\t{ModifiedClient}) of
+#                        journals we already verified as non-empty; reused across
+#                        runs to skip re-downloading unchanged journals (default:
+#                        /app/.config/rmapi/cleanup-cache.tsv, alongside rmapi's
+#                        own config so it lives in the existing persistent volume)
 #
 
 set -e
@@ -30,11 +45,40 @@ CLEANUP_ENABLED="${CLEANUP_ENABLED:-true}"
 CLEANUP_KEEP_DAYS="${CLEANUP_KEEP_DAYS:-2}"
 CLEANUP_KEEP_HOURS="${CLEANUP_KEEP_HOURS:-$((CLEANUP_KEEP_DAYS * 24))}"
 EMPTY_RM_MAX_BYTES="${EMPTY_RM_MAX_BYTES:-1000}"
+EMPTY_BUNDLE_MAX_BYTES="${EMPTY_BUNDLE_MAX_BYTES:-50000}"
 SIZE_THRESHOLD="${SIZE_THRESHOLD:-25000}"
 CLEANUP_DRY_RUN="${CLEANUP_DRY_RUN:-false}"
+CLEANUP_CACHE="${CLEANUP_CACHE:-/app/.config/rmapi/cleanup-cache.tsv}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [cleanup] $*"
+}
+
+# Persistent cache of journals we already verified as non-empty.
+# Format: one line per journal, "<name>\t<ModifiedClient>".
+# A hit on (name, ModifiedClient) means: we downloaded this before, it had
+# writing, and the cloud copy hasn't changed since — so skip the download.
+cache_lookup_mc() {
+    [ -f "$CLEANUP_CACHE" ] || return 1
+    awk -F'\t' -v n="$1" '$1==n {print $2; found=1; exit} END{exit !found}' "$CLEANUP_CACHE"
+}
+
+cache_record() {
+    local name="$1" mc="$2"
+    [ -n "$mc" ] || return 0
+    mkdir -p "$(dirname "$CLEANUP_CACHE")" 2>/dev/null || true
+    if [ -f "$CLEANUP_CACHE" ]; then
+        awk -F'\t' -v n="$name" '$1!=n' "$CLEANUP_CACHE" > "$CLEANUP_CACHE.tmp" || true
+        mv "$CLEANUP_CACHE.tmp" "$CLEANUP_CACHE"
+    fi
+    printf '%s\t%s\n' "$name" "$mc" >> "$CLEANUP_CACHE"
+}
+
+cache_forget() {
+    local name="$1"
+    [ -f "$CLEANUP_CACHE" ] || return 0
+    awk -F'\t' -v n="$name" '$1!=n' "$CLEANUP_CACHE" > "$CLEANUP_CACHE.tmp" || true
+    mv "$CLEANUP_CACHE.tmp" "$CLEANUP_CACHE"
 }
 
 # Exit early if cleanup is disabled
@@ -72,7 +116,7 @@ mc_to_epoch() {
     echo $((days * 86400 + h * 3600 + mi * 60 + se))
 }
 
-log "Scanning for empty journals not modified in the last ${CLEANUP_KEEP_HOURS}h"
+log "Scanning for empty journals modified within the last ${CLEANUP_KEEP_HOURS}h (older journals are left alone)"
 [ "$CLEANUP_DRY_RUN" = "true" ] && log "DRY RUN enabled: nothing will be deleted"
 
 # Create temp directory for operations
@@ -168,25 +212,52 @@ while IFS= read -r line; do
 
     DOC_PATH="$REMARKABLE_FOLDER/$DOC_NAME"
 
-    # Recency gate: keep journals modified within CLEANUP_KEEP_HOURS, using the
-    # cloud's ModifiedClient (more accurate than the name date - a journal
-    # written in days after it was created stays recent). Skipping these also
-    # avoids downloading them. Falls through to the size check if stat fails.
-    MC=$(rmapi stat "$DOC_PATH" 2>/dev/null | jq -r '.ModifiedClient // empty' 2>/dev/null || true)
+    # Recency gate (flipped): journals are only deletion candidates while they
+    # are YOUNGER than CLEANUP_KEEP_HOURS. Anything older is considered settled
+    # and is left alone — no download, no inspection, never deleted. This caps
+    # work at a couple of journals per pass and guarantees that once a journal
+    # survives past the window it stays forever. Falls through to inspection
+    # only if rmapi stat returned a parseable ModifiedClient.
+    STAT_JSON=$(rmapi stat "$DOC_PATH" 2>/dev/null || true)
+    MC=$(echo "$STAT_JSON" | jq -r '.ModifiedClient // empty' 2>/dev/null || true)
+    SIZE_IN_BYTES=$(echo "$STAT_JSON" | jq -r '.sizeInBytes // .SizeInBytes // empty' 2>/dev/null || true)
     if [ -n "$MC" ]; then
         MC_EPOCH=$(mc_to_epoch "$MC")
         if [ -n "$MC_EPOCH" ]; then
             AGE_HOURS=$(( (NOW_EPOCH - MC_EPOCH) / 3600 ))
-            if [ "$AGE_HOURS" -lt "$CLEANUP_KEEP_HOURS" ]; then
-                log "Keeping (modified ${AGE_HOURS}h ago < ${CLEANUP_KEEP_HOURS}h): $DOC_NAME"
+            if [ "$AGE_HOURS" -ge "$CLEANUP_KEEP_HOURS" ]; then
+                log "Skipping (settled, modified ${AGE_HOURS}h ago >= ${CLEANUP_KEEP_HOURS}h): $DOC_NAME"
                 KEPT=$((KEPT + 1))
                 continue
             fi
         fi
     fi
 
+    # Persistent-cache short-circuit: if we already verified this exact
+    # (name, ModifiedClient) as non-empty, skip the download.
+    if [ -n "$MC" ]; then
+        CACHED_MC=$(cache_lookup_mc "$DOC_NAME" 2>/dev/null || true)
+        if [ -n "$CACHED_MC" ] && [ "$CACHED_MC" = "$MC" ]; then
+            log "Keeping (cached non-empty, ModifiedClient unchanged): $DOC_NAME"
+            KEPT=$((KEPT + 1))
+            continue
+        fi
+    fi
+
+    # Cloud-size short-circuit: the empty generated bundle is ~6KB; any real
+    # ink pushes the bundle well past EMPTY_BUNDLE_MAX_BYTES. If the cloud
+    # already reports a big bundle, treat it as written-on and skip the
+    # download. Only trust this if we also have a ModifiedClient to cache
+    # against, so we don't re-skip if the cloud copy later changes.
+    if [ -n "$SIZE_IN_BYTES" ] && [ "$SIZE_IN_BYTES" -gt "$EMPTY_BUNDLE_MAX_BYTES" ] 2>/dev/null; then
+        log "Keeping (cloud size ${SIZE_IN_BYTES} > ${EMPTY_BUNDLE_MAX_BYTES}, written-on): $DOC_NAME"
+        [ -n "$MC" ] && cache_record "$DOC_NAME" "$MC"
+        KEPT=$((KEPT + 1))
+        continue
+    fi
+
     CHECKED=$((CHECKED + 1))
-    log "Checking: $DOC_NAME (stale, verifying contents)"
+    log "Checking: $DOC_NAME (in window, verifying contents)"
 
     # Download the journal to a temp subdirectory
     WORK_DIR="$TEMP_DIR/$DOC_DATE"
@@ -222,6 +293,7 @@ while IFS= read -r line; do
 
     if check_has_annotations "$DOWNLOADED_FILE"; then
         log "  Journal has writing, keeping"
+        [ -n "$MC" ] && cache_record "$DOC_NAME" "$MC"
         KEPT=$((KEPT + 1))
     elif [ "$CLEANUP_DRY_RUN" = "true" ]; then
         log "  DRY RUN: would remove empty journal: $DOC_PATH"
@@ -230,6 +302,7 @@ while IFS= read -r line; do
         log "  Journal is empty/unwritten, removing: $DOC_PATH"
         if rmapi rm "$DOC_PATH"; then
             log "  Removed: $DOC_NAME"
+            cache_forget "$DOC_NAME"
             DELETED=$((DELETED + 1))
         else
             log "  ERROR: Failed to remove"

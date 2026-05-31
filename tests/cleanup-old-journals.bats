@@ -87,6 +87,26 @@ setup() {
     grep -q 'ModifiedClient' "$SCRIPT"
 }
 
+@test "recency gate only inspects journals YOUNGER than CLEANUP_KEEP_HOURS" {
+    # Flipped policy: settled journals (>= window) are skipped without download.
+    grep -q 'AGE_HOURS.*-ge.*CLEANUP_KEEP_HOURS' "$SCRIPT"
+    grep -q 'settled' "$SCRIPT"
+    # The old "less than" gate is gone.
+    ! grep -q 'AGE_HOURS.*-lt.*CLEANUP_KEEP_HOURS' "$SCRIPT"
+}
+
+@test "script short-circuits the download via cloud sizeInBytes" {
+    grep -q 'EMPTY_BUNDLE_MAX_BYTES' "$SCRIPT"
+    grep -q 'sizeInBytes' "$SCRIPT"
+}
+
+@test "script persists a verified-non-empty cache" {
+    grep -q 'CLEANUP_CACHE' "$SCRIPT"
+    grep -q 'cache_lookup_mc' "$SCRIPT"
+    grep -q 'cache_record' "$SCRIPT"
+    grep -q 'cache_forget' "$SCRIPT"
+}
+
 @test "script deletes only empty journals by .rm size" {
     grep -q 'EMPTY_RM_MAX_BYTES' "$SCRIPT"
 }

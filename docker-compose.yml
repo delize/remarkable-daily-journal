@@ -59,14 +59,19 @@ services:
       # Set to "false" to disable cleanup of unused journals
       - CLEANUP_ENABLED=true
 
-      # Keep journals modified within this many hours (by the cloud's
-      # ModifiedClient time); older journals that are still empty get removed.
-      # Setting CLEANUP_KEEP_DAYS instead also works and derives this.
+      # Only inspect journals modified within this many hours (cloud's
+      # ModifiedClient time). Anything older is considered settled and is
+      # never downloaded or deleted. Setting CLEANUP_KEEP_DAYS also works.
       - CLEANUP_KEEP_HOURS=48
 
       # A page .rm at/below this size (bytes) counts as unwritten, so a notebook
       # whose pages are all blank gets cleaned up. Raise if light notes vanish.
       - EMPTY_RM_MAX_BYTES=1000
+
+      # If the cloud's sizeInBytes is above this, skip the download entirely
+      # and treat the journal as written-on. Empty bundles are ~6KB; any real
+      # ink pushes them past ~50KB.
+      - EMPTY_BUNDLE_MAX_BYTES=50000
 
       # Set to "true" to log what cleanup WOULD delete without removing anything.
       # Useful for a first run to confirm it only targets empty journals.
@@ -74,6 +79,10 @@ services:
 
       # Fallback size threshold (bytes) for non-ZIP downloads
       - SIZE_THRESHOLD=25000
+
+      # Persistent cache of verified-non-empty journals. Stored alongside the
+      # rmapi config so it lives in the same volume; no extra mount needed.
+      # - CLEANUP_CACHE=/app/.config/rmapi/cleanup-cache.tsv
 
       # --- Health reporting to GitHub Issues (optional) ---
       # If both are set, the container opens ONE GitHub issue per failure mode
