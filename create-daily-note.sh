@@ -55,8 +55,11 @@ log "Creating daily journal: $JOURNAL_NAME"
 log "Target folder: $REMARKABLE_FOLDER"
 log "Template: $TEMPLATE_STYLE, pages: $TEMPLATE_PAGES"
 
-# Build the native notebook; the notebook name (visibleName) is JOURNAL_NAME.
-RMDOC_FILE="$TEMP_DIR/journal.rmdoc"
+# Build the native notebook. rmapi put uses the file's basename as the cloud
+# visibleName, so name the .rmdoc after JOURNAL_NAME (slashes → dashes so an
+# unusual JOURNAL_NAME_FORMAT can't escape the temp dir).
+SAFE_NAME="${JOURNAL_NAME//\//-}"
+RMDOC_FILE="$TEMP_DIR/$SAFE_NAME.rmdoc"
 JOURNAL_NAME="$JOURNAL_NAME" \
 TEMPLATE_STYLE="$TEMPLATE_STYLE" \
 TEMPLATE_PAGES="$TEMPLATE_PAGES" \
