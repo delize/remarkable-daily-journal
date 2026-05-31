@@ -41,15 +41,31 @@ services:
       # %A = weekday, %B = month, %d = day, %Y = year
       - TITLE_FORMAT=%A, %B %d, %Y
       
-      # Number of blank pages per notebook
-      - TEMPLATE_PAGES=5
+      # Pages per notebook. 1 is enough: pages you add on the device inherit
+      # the current page's template automatically.
+      - TEMPLATE_PAGES=1
+
+      # Built-in reMarkable template to apply to each page. Friendly aliases:
+      # blank, lined, grid, checklist. Or set a raw template name, e.g.
+      # TEMPLATE_STYLE=P Dots S
+      - TEMPLATE_STYLE=lined
 
       # Cleanup settings for unused journals
       # Set to "false" to disable cleanup of unused journals
       - CLEANUP_ENABLED=true
 
-      # Days to keep journals before they become eligible for cleanup
-      - CLEANUP_KEEP_DAYS=1
+      # Keep journals modified within this many hours (by the cloud's
+      # ModifiedClient time); older journals that are still empty get removed.
+      # Setting CLEANUP_KEEP_DAYS instead also works and derives this.
+      - CLEANUP_KEEP_HOURS=48
+
+      # A page .rm at/below this size (bytes) counts as unwritten, so a notebook
+      # whose pages are all blank gets cleaned up. Raise if light notes vanish.
+      - EMPTY_RM_MAX_BYTES=1000
+
+      # Set to "true" to log what cleanup WOULD delete without removing anything.
+      # Useful for a first run to confirm it only targets empty journals.
+      - CLEANUP_DRY_RUN=false
 
       # Fallback size threshold (bytes) for non-ZIP downloads
       - SIZE_THRESHOLD=25000

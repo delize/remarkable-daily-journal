@@ -324,17 +324,18 @@ case "${1:-run}" in
         echo "Environment variables:"
         echo "  REMARKABLE_FOLDER  - Target folder (default: /Daily Journal)"
         echo "  DATE_FORMAT        - Filename date format (default: %Y-%m-%d)"
-        echo "  TEMPLATE_PAGES     - Pages per notebook (default: 5)"
-        echo "  TEMPLATE_STYLE     - Page style: blank, lined, grid (default: blank)"
-        echo "  LINE_SPACING       - Line spacing in points (default: 24)"
-        echo "  LINE_COLOR         - Line color as 'R G B' 0-1 (default: 0.85 0.85 0.85)"
+        echo "  TEMPLATE_PAGES     - Pages per notebook (default: 1)"
+        echo "  TEMPLATE_STYLE     - Template: blank, lined, grid, checklist, or a"
+        echo "                       raw reMarkable template name (default: lined)"
         echo "  CRON_SCHEDULE      - Cron expression (default: 0 6 * * *)"
         echo "  TZ                 - Timezone (default: UTC)"
         echo ""
         echo "Cleanup settings:"
         echo "  CLEANUP_ENABLED    - Enable cleanup of unused journals (default: true)"
-        echo "  CLEANUP_KEEP_DAYS  - Days to keep before cleanup eligibility (default: 1)"
+        echo "  CLEANUP_KEEP_HOURS - Keep journals modified within this many hours (default: 48)"
+        echo "  EMPTY_RM_MAX_BYTES - Page .rm at/below this size counts as empty (default: 1000)"
         echo "  SIZE_THRESHOLD     - Fallback size threshold in bytes (default: 25000)"
+        echo "  CLEANUP_DRY_RUN    - Log deletions without removing anything (default: false)"
         exit 1
         ;;
 esac

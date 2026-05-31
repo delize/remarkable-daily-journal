@@ -32,8 +32,8 @@ ARG PGID=1000
 RUN apk add --no-cache \
     bash \
     tzdata \
-    ghostscript \
     unzip \
+    zip \
     curl \
     jq \
     ca-certificates
@@ -50,11 +50,13 @@ ENV PUID=${PUID} PGID=${PGID}
 
 WORKDIR /app
 
-# Copy scripts
+# Copy scripts and native-notebook assets (blank .rm stencil + base .content)
 COPY create-daily-note.sh /app/
+COPY generate-native-journal.sh /app/
 COPY cleanup-old-journals.sh /app/
 COPY github-notify.sh /app/
 COPY entrypoint.sh /app/
+COPY assets/ /app/assets/
 RUN chmod +x /app/*.sh
 
 # Config volume for rmapi authentication
