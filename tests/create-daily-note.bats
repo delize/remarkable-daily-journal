@@ -32,8 +32,8 @@ setup() {
     grep -q "^log()" "$SCRIPT"
 }
 
-@test "script has create_pdf function" {
-    grep -q "^create_pdf()" "$SCRIPT"
+@test "script generates a native notebook via the generator" {
+    grep -q "generate-native-journal.sh" "$SCRIPT"
 }
 
 @test "script creates temp directory with cleanup trap" {
@@ -57,7 +57,7 @@ setup() {
     grep -q "rmapi find" "$SCRIPT"
 }
 
-@test "script uploads PDF to reMarkable" {
+@test "script uploads the notebook to reMarkable" {
     grep -q "rmapi put" "$SCRIPT"
 }
 

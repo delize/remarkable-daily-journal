@@ -82,9 +82,17 @@ setup() {
     grep -q 'Skip today' "$SCRIPT"
 }
 
-@test "script calculates cutoff date from CLEANUP_KEEP_DAYS" {
-    grep -q 'CUTOFF_DATE' "$SCRIPT"
-    grep -q 'CLEANUP_KEEP_DAYS' "$SCRIPT"
+@test "script applies a recency gate from CLEANUP_KEEP_HOURS" {
+    grep -q 'CLEANUP_KEEP_HOURS' "$SCRIPT"
+    grep -q 'ModifiedClient' "$SCRIPT"
+}
+
+@test "script deletes only empty journals by .rm size" {
+    grep -q 'EMPTY_RM_MAX_BYTES' "$SCRIPT"
+}
+
+@test "script supports a dry-run mode" {
+    grep -q 'CLEANUP_DRY_RUN' "$SCRIPT"
 }
 
 @test "script reports cleanup stats" {

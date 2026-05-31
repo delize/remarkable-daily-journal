@@ -75,7 +75,7 @@ setup() {
 
 @test "script documents cleanup settings in help" {
     grep -q "CLEANUP_ENABLED" "$SCRIPT"
-    grep -q "CLEANUP_KEEP_DAYS" "$SCRIPT"
+    grep -q "CLEANUP_KEEP_HOURS" "$SCRIPT"
     grep -q "SIZE_THRESHOLD" "$SCRIPT"
 }
 
