@@ -63,7 +63,7 @@ setup() {
 }
 
 @test "script supports custom date argument" {
-    grep -q 'if \[ -n "\$1" \]' "$SCRIPT"
+    grep -qE 'if \[ -n "\$\{?1' "$SCRIPT"
 }
 
 @test "script supports a configurable notebook name" {
@@ -84,4 +84,23 @@ setup() {
     grep -q 'RMDOC_FILE="\$TEMP_DIR/\$SAFE_NAME.rmdoc"' "$SCRIPT"
     grep -qE 'SAFE_NAME=' "$SCRIPT"
     ! grep -q 'TEMP_DIR/journal\.rmdoc' "$SCRIPT"
+}
+
+@test "honors JOURNAL_NAME env override in a dry run" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    run env DRY_RUN=true JOURNAL_NAME=template-fix-test "$SCRIPT"
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q 'template-fix-test'
+    ! echo "$output" | grep -qE 'Creating daily journal: [0-9]{4}-[0-9]{2}-[0-9]{2}$'
+}
+
+@test "positional date argument still wins over JOURNAL_NAME env" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    date -d "2026-01-15" +%Y-%m-%d >/dev/null 2>&1 || skip "GNU date -d not available"
+    run env DRY_RUN=true JOURNAL_NAME=ignored-by-arg "$SCRIPT" 2026-01-15
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q '2026-01-15'
+    ! echo "$output" | grep -q 'ignored-by-arg'
 }
