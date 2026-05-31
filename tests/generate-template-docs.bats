@@ -38,3 +38,10 @@ setup() {
     grep -q 'Landscape templates' "$out"
     grep -q 'P Lines medium' "$out"
 }
+
+@test "all committed hardware template lists are valid and non-empty" {
+    command -v jq >/dev/null || skip "jq not available"
+    for f in "$REPO"/assets/templates/*.json; do
+        jq -e '.hardware and .firmware and (.templates | length > 0)' "$f" >/dev/null
+    done
+}

@@ -20,7 +20,7 @@ Daily journals are portrait, so prefer the **Portrait** templates. Landscape
 (`LS …`) templates are listed for completeness.
 
 > Source: `/usr/share/remarkable/templates/templates.json` from reMarkable
-> `rmpp` firmware `3.27.1.0`. Auto-generated — do not edit by hand;
+> `rm1` firmware `3.27.1.0`. Auto-generated — do not edit by hand;
 > run scripts/generate-template-docs.sh. The set can differ across firmware.
 
 ## Portrait templates
