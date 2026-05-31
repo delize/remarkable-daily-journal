@@ -110,8 +110,8 @@ environment:
   # Device whose template list to validate against: rmpp / rm2 / rm1
   - TEMPLATE_HARDWARE=rmpp
 
-  # Pages per notebook. 1 is enough — pages you add on the device inherit
-  # the current page's template automatically.
+  # Pages per notebook. 1 is enough — the generator points cPages.lastOpened
+  # at page 1, and the device's add-page action copies that page's template.
   - TEMPLATE_PAGES=1
 
   # Cleanup: remove old journals that were never written in
