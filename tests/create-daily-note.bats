@@ -77,3 +77,11 @@ setup() {
     [ "$status" -eq 0 ]
     echo "$output" | grep -q "Journal "
 }
+
+@test "names the .rmdoc after JOURNAL_NAME so rmapi visibleName matches" {
+    # rmapi put uses the file basename as visibleName. The temp file must be
+    # named after JOURNAL_NAME, not a hardcoded "journal".
+    grep -q 'RMDOC_FILE="\$TEMP_DIR/\$SAFE_NAME.rmdoc"' "$SCRIPT"
+    grep -qE 'SAFE_NAME=' "$SCRIPT"
+    ! grep -q 'TEMP_DIR/journal\.rmdoc' "$SCRIPT"
+}
