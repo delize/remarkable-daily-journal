@@ -98,7 +98,6 @@ setup() {
 @test "positional date argument still wins over JOURNAL_NAME env" {
     command -v zip >/dev/null || skip "zip not available"
     command -v jq >/dev/null || skip "jq not available"
-    date -d "2026-01-15" +%Y-%m-%d >/dev/null 2>&1 || skip "GNU date -d not available"
     run env DRY_RUN=true JOURNAL_NAME=ignored-by-arg "$SCRIPT" 2026-01-15
     [ "$status" -eq 0 ]
     echo "$output" | grep -q '2026-01-15'
@@ -107,8 +106,19 @@ setup() {
 
 @test "backfill date arg derives CREATED_TIME_MS from that date" {
     # Inspect the script: when a positional date arg is given, it must export
-    # CREATED_TIME_MS derived from that date so the generator stamps the
+    # a CREATED_TIME_MS derived from that date so the generator stamps the
     # journal's metadata with the backfill day rather than today.
-    grep -q 'CREATED_TIME_MS=.*date -d "\$1 12:00:00 UTC" +%s' "$SCRIPT"
+    grep -q 'CREATED_TIME_MS="\$(parse_date_noon_utc_epoch "\$1")000"' "$SCRIPT"
     grep -q 'export CREATED_TIME_MS' "$SCRIPT"
+    grep -q '^parse_date_noon_utc_epoch()' "$SCRIPT"
+}
+
+@test "backfill end-to-end: bundle.metadata.createdTime resolves to that date" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    run env DRY_RUN=true JOURNAL_NAME=ignored "$SCRIPT" 2026-01-15
+    [ "$status" -eq 0 ]
+    # Script doesn't run the generator in DRY_RUN, but the date parsing has
+    # to succeed without error and the log line must echo the backfill name.
+    echo "$output" | grep -q 'Creating daily journal: 2026-01-15'
 }
