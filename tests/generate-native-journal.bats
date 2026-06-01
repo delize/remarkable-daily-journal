@@ -26,6 +26,16 @@ setup() {
     [ -f "$SCRIPT_DIR/assets/base.content.json" ]
 }
 
+@test "blank stencil is a v6 .rm file with no rmpp extras" {
+    # rmscene 0.6.1 warns on SceneInfo extra_data; the cleaned stencil has it
+    # stripped. Size regression-tests that: pre-clean was 409 bytes, clean is
+    # 300. Anything > 350 means the rmpp scene-metadata bytes are back.
+    head -c 43 "$SCRIPT_DIR/assets/blank-page.rm" \
+        | grep -q '^reMarkable .lines file, version=6'
+    size=$(wc -c < "$SCRIPT_DIR/assets/blank-page.rm")
+    [ "$size" -lt 350 ]
+}
+
 @test "script maps friendly template styles to device template names" {
     grep -q 'P Lines medium' "$SCRIPT"
     grep -q 'P Grid medium' "$SCRIPT"
