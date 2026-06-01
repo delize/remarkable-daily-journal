@@ -111,12 +111,14 @@ STENCIL_AUTHOR_UUID_OFFSET=58
 # cPages.uuids[0].first). The stencil and .content thus reference the same
 # identity end-to-end.
 patch_stencil_uuid() {
-  local in="$1" out="$2" uuid_hex
+  local in="$1" out="$2" uuid_hex escaped
   uuid_hex="${AUTHOR_UUID//-/}"
   cp "$in" "$out"
-  # bash printf interprets \xNN as a byte; pipe into dd to overwrite in place.
-  # shellcheck disable=SC2059
-  printf "$(printf '\\x%s' $(echo "$uuid_hex" | fold -w2))" \
+  # Convert "feed1234..." -> the escape string "\xfe\xed\x12\x34..." with sed,
+  # then have printf interpret the escapes into raw bytes for dd to drop into
+  # the stencil at the AuthorIdsBlock offset.
+  escaped="$(printf '%s' "$uuid_hex" | sed 's/../\\x&/g')"
+  printf '%b' "$escaped" \
     | dd of="$out" bs=1 seek="$STENCIL_AUTHOR_UUID_OFFSET" count=16 \
         conv=notrunc status=none
 }
