@@ -23,6 +23,16 @@
 #                      rmpp, rm2, rm1. Validation only warns; never blocks.
 #   JOURNAL_NAME     notebook visibleName (default: today's date, YYYY-MM-DD)
 #   OUTPUT_FILE      output .rmdoc path (default: ./<JOURNAL_NAME>.rmdoc)
+#   AUTHOR_UUID      canonical UUID stamped into both the page's AuthorIdsBlock
+#                      (.rm bytes) and cPages.uuids[0].first (.content JSON).
+#                      Default: a fresh random UUID per journal. Set this to
+#                      your own account's author UUID if you want every journal
+#                      to be tagged as authored by you (see README for how to
+#                      extract it from one of your existing notebooks).
+#   CREATED_TIME_MS  millisecond epoch stamped into .metadata.createdTime,
+#                      .lastModified, and per-page modifed. Default: now.
+#                      Set this (e.g. from create-daily-note.sh's backfill arg)
+#                      to make the journal's creation date match its name.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -73,6 +83,46 @@ gen_uuid() {
   fi
 }
 
+# Resolve and validate the author UUID. Default: a fresh random one per
+# journal so we never leak the stencil's baked identity into the cloud.
+AUTHOR_UUID="${AUTHOR_UUID:-$(gen_uuid)}"
+if ! [[ "$AUTHOR_UUID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+  echo "ERROR: AUTHOR_UUID is not a canonical UUID: $AUTHOR_UUID" >&2
+  exit 1
+fi
+AUTHOR_UUID="$(echo "$AUTHOR_UUID" | tr 'A-Z' 'a-z')"
+
+# Stamp time. Default: now. create-daily-note.sh overrides this when given
+# a backfill date so createdTime matches the journal's name.
+CREATED_TIME_MS="${CREATED_TIME_MS:-$(date +%s)000}"
+if ! [[ "$CREATED_TIME_MS" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: CREATED_TIME_MS must be a millisecond epoch: $CREATED_TIME_MS" >&2
+  exit 1
+fi
+
+# Byte offset of the AuthorIdsBlock UUID inside the v6 stencil. The 16 bytes
+# starting here are the only place the per-document author identity is stored
+# in raw form. Verified against assets/blank-page.rm; tests/generate-native-
+# journal.bats keeps it honest if the stencil is ever regenerated.
+STENCIL_AUTHOR_UUID_OFFSET=58
+
+# Overwrite the stencil's baked UUID with AUTHOR_UUID's 16 raw bytes
+# (canonical order — matches what the .content JSON shows as
+# cPages.uuids[0].first). The stencil and .content thus reference the same
+# identity end-to-end.
+patch_stencil_uuid() {
+  local in="$1" out="$2" uuid_hex escaped
+  uuid_hex="${AUTHOR_UUID//-/}"
+  cp "$in" "$out"
+  # Convert "feed1234..." -> the escape string "\xfe\xed\x12\x34..." with sed,
+  # then have printf interpret the escapes into raw bytes for dd to drop into
+  # the stencil at the AuthorIdsBlock offset.
+  escaped="$(printf '%s' "$uuid_hex" | sed 's/../\\x&/g')"
+  printf '%b' "$escaped" \
+    | dd of="$out" bs=1 seek="$STENCIL_AUTHOR_UUID_OFFSET" count=16 \
+        conv=notrunc status=none
+}
+
 # reMarkable fractional-index ordering key for the i-th page (1-based).
 # Two base-62 chars (ASCII order: 0-9 A-Z a-z). Page 1 == "ba", matching what
 # the device itself writes; equal-length keys sort lexicographically = order.
@@ -83,19 +133,19 @@ idx_key() {
 }
 
 DOCID="$(gen_uuid)"
-NOW_MS="$(date +%s)000"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/$DOCID"
 
-# Build the pages array, cloning the stencil for each page.
+# Build the pages array, cloning the stencil (with AUTHOR_UUID patched in)
+# for each page.
 pages='[]'
 for i in $(seq 1 "$TEMPLATE_PAGES"); do
   pid="$(gen_uuid)"
-  cp "$STENCIL" "$WORK/$DOCID/$pid.rm"
+  patch_stencil_uuid "$STENCIL" "$WORK/$DOCID/$pid.rm"
   pages="$(jq \
     --arg id "$pid" --arg idx "$(idx_key "$i")" \
-    --arg tmpl "$RM_TEMPLATE" --arg ts "$NOW_MS" \
+    --arg tmpl "$RM_TEMPLATE" --arg ts "$CREATED_TIME_MS" \
     '. += [{
        id: $id,
        idx:      { timestamp: "1:2", value: $idx },
@@ -104,17 +154,20 @@ for i in $(seq 1 "$TEMPLATE_PAGES"); do
      }]' <<<"$pages")"
 done
 
-# .content: inject pages + count into the known-good base template, and point
-# cPages.lastOpened at the first page so pages added on the device inherit its
-# template (xochitl's add-page copies the template from lastOpened's page).
-jq --argjson pages "$pages" --argjson n "$TEMPLATE_PAGES" \
+# .content: inject pages + count into the known-good base template, point
+# cPages.lastOpened at the first page so pages added on the device inherit
+# its template (xochitl's add-page copies the template from lastOpened's
+# page), and stamp cPages.uuids[0].first with the same identity that we
+# wrote into the stencil's AuthorIdsBlock.
+jq --argjson pages "$pages" --argjson n "$TEMPLATE_PAGES" --arg uuid "$AUTHOR_UUID" \
   '.cPages.pages = $pages
    | .cPages.lastOpened = { timestamp: "1:1", value: $pages[0].id }
+   | .cPages.uuids = [ { first: $uuid, second: 1 } ]
    | .pageCount = $n' \
   "$BASE_CONTENT" > "$WORK/$DOCID.content"
 
 # .metadata
-jq -n --arg name "$JOURNAL_NAME" --arg ts "$NOW_MS" \
+jq -n --arg name "$JOURNAL_NAME" --arg ts "$CREATED_TIME_MS" \
   '{
      createdTime: $ts, lastModified: $ts, lastOpened: "0", lastOpenedPage: -1,
      new: true, parent: "", pinned: false, source: "",
@@ -128,3 +181,4 @@ rm -f "$OUT_ABS"
 
 echo "Generated: $OUT_ABS"
 echo "  name=$JOURNAL_NAME  template=$RM_TEMPLATE  pages=$TEMPLATE_PAGES  doc=$DOCID"
+echo "  author=$AUTHOR_UUID  createdTime=$CREATED_TIME_MS"

@@ -36,6 +36,120 @@ setup() {
     [ "$size" -lt 350 ]
 }
 
+@test "stencil's AuthorIdsBlock UUID lives at the expected offset" {
+    # generate-native-journal.sh patches AUTHOR_UUID into the stencil at a
+    # hardcoded offset (STENCIL_AUTHOR_UUID_OFFSET=58). If anyone regenerates
+    # the stencil and the offset drifts, the patcher silently writes into the
+    # wrong bytes. Pin both: the offset in the script AND that the bytes at
+    # that offset match cPages.uuids[0].first in base.content.json.
+    grep -q 'STENCIL_AUTHOR_UUID_OFFSET=58' "$SCRIPT_DIR/generate-native-journal.sh"
+    expected_uuid="$(jq -r '.cPages.uuids[0].first' "$SCRIPT_DIR/assets/base.content.json")"
+    expected_hex="${expected_uuid//-/}"
+    actual_hex="$(dd if="$SCRIPT_DIR/assets/blank-page.rm" bs=1 skip=58 count=16 2>/dev/null | xxd -p -c 32)"
+    [ "$expected_hex" = "$actual_hex" ]
+}
+
+@test "AUTHOR_UUID propagates to .content uuids[0].first AND stencil bytes" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    out="$BATS_TEST_TMPDIR/uuid.rmdoc"
+    custom="feed1234-cafe-babe-dead-beefdeadbeef"
+    run env AUTHOR_UUID="$custom" TEMPLATE_STYLE=lined TEMPLATE_PAGES=2 \
+        JOURNAL_NAME=uuid-test OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    dir="$BATS_TEST_TMPDIR/uuid-unpacked"
+    mkdir -p "$dir"
+    unzip -oq "$out" -d "$dir"
+
+    # JSON side
+    [ "$(jq -r '.cPages.uuids[0].first' "$dir"/*.content)" = "$custom" ]
+    [ "$(jq -r '.cPages.uuids[0].second' "$dir"/*.content)" = "1" ]
+
+    # Every page's .rm has the new bytes at offset 58
+    expected_hex="${custom//-/}"
+    for f in "$dir"/*/*.rm; do
+        actual_hex="$(dd if="$f" bs=1 skip=58 count=16 2>/dev/null | xxd -p -c 32)"
+        [ "$expected_hex" = "$actual_hex" ]
+    done
+}
+
+@test "AUTHOR_UUID defaults to a fresh random per-run UUID" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+
+    a="$BATS_TEST_TMPDIR/a.rmdoc"; b="$BATS_TEST_TMPDIR/b.rmdoc"
+    env TEMPLATE_STYLE=lined TEMPLATE_PAGES=1 JOURNAL_NAME=a OUTPUT_FILE="$a" "$SCRIPT" >/dev/null
+    env TEMPLATE_STYLE=lined TEMPLATE_PAGES=1 JOURNAL_NAME=b OUTPUT_FILE="$b" "$SCRIPT" >/dev/null
+
+    da="$BATS_TEST_TMPDIR/da"; db="$BATS_TEST_TMPDIR/db"
+    mkdir -p "$da" "$db"
+    unzip -oq "$a" -d "$da"
+    unzip -oq "$b" -d "$db"
+
+    ua="$(jq -r '.cPages.uuids[0].first' "$da"/*.content)"
+    ub="$(jq -r '.cPages.uuids[0].first' "$db"/*.content)"
+
+    # Both UUIDs are well-formed
+    echo "$ua" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    echo "$ub" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    # And different from each other
+    [ "$ua" != "$ub" ]
+    # And neither is the baked stencil default (we never want to leak it).
+    baked="$(jq -r '.cPages.uuids[0].first' "$SCRIPT_DIR/assets/base.content.json")"
+    [ "$ua" != "$baked" ]
+}
+
+@test "rejects a malformed AUTHOR_UUID" {
+    run env AUTHOR_UUID=not-a-uuid TEMPLATE_STYLE=lined TEMPLATE_PAGES=1 \
+        JOURNAL_NAME=bad OUTPUT_FILE="$BATS_TEST_TMPDIR/bad.rmdoc" "$SCRIPT"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -qi 'AUTHOR_UUID'
+}
+
+@test "generated .content never has null cPages.pages, uuids, or pageCount" {
+    # reMarkable docs that were never opened on a device can ship with null
+    # cPages / pages / uuids — consumers iterating those fields crash on
+    # NoneType. Our generator writes real arrays + positive pageCount on
+    # every run; this test pins that so a future jq tweak can't regress us.
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    out="$BATS_TEST_TMPDIR/inv.rmdoc"
+    run env TEMPLATE_STYLE=lined TEMPLATE_PAGES=1 JOURNAL_NAME=inv OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    dir="$BATS_TEST_TMPDIR/inv-unpacked"
+    mkdir -p "$dir"
+    unzip -oq "$out" -d "$dir"
+
+    [ "$(jq -r '.cPages.pages       | type' "$dir"/*.content)" = "array" ]
+    [ "$(jq -r '.cPages.pages       | length' "$dir"/*.content)" -ge 1 ]
+    [ "$(jq -r '.cPages.uuids       | type' "$dir"/*.content)" = "array" ]
+    [ "$(jq -r '.cPages.uuids       | length' "$dir"/*.content)" -ge 1 ]
+    [ "$(jq -r '.cPages.lastOpened  | type' "$dir"/*.content)" = "object" ]
+    [ "$(jq -r '.pageCount          | type' "$dir"/*.content)" = "number" ]
+    [ "$(jq -r '.pageCount' "$dir"/*.content)" -ge 1 ]
+    [ "$(jq -r '.tags     | type' "$dir"/*.content)" = "array" ]
+    [ "$(jq -r '.pageTags | type' "$dir"/*.content)" = "array" ]
+}
+
+@test "CREATED_TIME_MS overrides metadata timestamps and per-page modifed" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    out="$BATS_TEST_TMPDIR/ts.rmdoc"
+    ts=1234567890000
+    run env CREATED_TIME_MS="$ts" TEMPLATE_STYLE=lined TEMPLATE_PAGES=2 \
+        JOURNAL_NAME=ts-test OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    dir="$BATS_TEST_TMPDIR/ts-unpacked"
+    mkdir -p "$dir"
+    unzip -oq "$out" -d "$dir"
+    [ "$(jq -r '.createdTime' "$dir"/*.metadata)" = "$ts" ]
+    [ "$(jq -r '.lastModified' "$dir"/*.metadata)" = "$ts" ]
+    # All page modifed fields also pick up the override
+    for got in $(jq -r '.cPages.pages[].modifed' "$dir"/*.content); do
+        [ "$got" = "$ts" ]
+    done
+}
+
 @test "script maps friendly template styles to device template names" {
     grep -q 'P Lines medium' "$SCRIPT"
     grep -q 'P Grid medium' "$SCRIPT"
