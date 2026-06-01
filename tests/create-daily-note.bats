@@ -104,3 +104,11 @@ setup() {
     echo "$output" | grep -q '2026-01-15'
     ! echo "$output" | grep -q 'ignored-by-arg'
 }
+
+@test "backfill date arg derives CREATED_TIME_MS from that date" {
+    # Inspect the script: when a positional date arg is given, it must export
+    # CREATED_TIME_MS derived from that date so the generator stamps the
+    # journal's metadata with the backfill day rather than today.
+    grep -q 'CREATED_TIME_MS=.*date -d "\$1 12:00:00 UTC" +%s' "$SCRIPT"
+    grep -q 'export CREATED_TIME_MS' "$SCRIPT"
+}

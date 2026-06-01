@@ -22,6 +22,11 @@
 #                       inherit the current page's template automatically.
 #   TEMPLATE_STYLE    - Template: blank, lined, grid, checklist, or any raw
 #                       reMarkable template name (default: lined -> "P Lines medium")
+#   AUTHOR_UUID       - Optional canonical UUID stamped into every page so the
+#                       device sees these journals as authored by you. Default:
+#                       a fresh random UUID per journal. See README for how to
+#                       extract your account's UUID from one of your existing
+#                       notebooks.
 #   DRY_RUN           - Set to "true" to skip upload
 #
 
@@ -42,8 +47,12 @@ DRY_RUN="${DRY_RUN:-false}"
 
 # Notebook name. Priority: positional date arg > JOURNAL_NAME env (literal
 # override, for ad-hoc test uploads) > strftime of today via JOURNAL_NAME_FORMAT.
+# Backfill: when a date arg is given, also stamp createdTime/lastModified at
+# noon UTC of that date so the device's "Created" date matches the name.
 if [ -n "${1:-}" ]; then
     JOURNAL_NAME=$(date -d "$1" +"$JOURNAL_NAME_FORMAT")
+    CREATED_TIME_MS="$(date -d "$1 12:00:00 UTC" +%s)000"
+    export CREATED_TIME_MS
 elif [ -z "${JOURNAL_NAME:-}" ]; then
     JOURNAL_NAME=$(date +"$JOURNAL_NAME_FORMAT")
 fi

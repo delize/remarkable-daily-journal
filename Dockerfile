@@ -57,7 +57,8 @@ COPY cleanup-old-journals.sh /app/
 COPY github-notify.sh /app/
 COPY entrypoint.sh /app/
 COPY assets/ /app/assets/
-RUN chmod +x /app/*.sh
+COPY scripts/ /app/scripts/
+RUN chmod +x /app/*.sh /app/scripts/*.sh
 
 # Config volume for rmapi authentication
 VOLUME /app/.config/rmapi

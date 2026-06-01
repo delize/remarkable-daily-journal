@@ -132,6 +132,41 @@ environment:
   - CLEANUP_DRY_RUN=false
 ```
 
+### Author UUID
+
+Every reMarkable page is tagged with an author UUID — the identity that
+"wrote" it. Notebooks you create on your tablet inherit your account's UUID;
+the journals this container generates default to a **fresh random UUID per
+run** so they never leak the same baked identity into the cloud.
+
+If you'd rather have every generated journal tagged as authored by you (so
+the device treats them as part of your library), set `AUTHOR_UUID` to your
+account's value:
+
+```bash
+# pick a notebook you HAND-CREATED on your tablet (not an import, not a
+# Methods notebook). The helper rmapi-gets it, reads .cPages.uuids[0].first
+# out of its .content, and prints the canonical UUID.
+docker exec remarkable-daily-journal \
+    /app/scripts/extract-author-uuid.sh "/Quick sheets/Notebook 2"
+# -> e.g. c45bf333-c30a-59b0-b588-0b682888b306
+```
+
+Then drop the printed value into `docker-compose.yml`:
+
+```yaml
+- AUTHOR_UUID=c45bf333-c30a-59b0-b588-0b682888b306
+```
+
+and restart the container. From the next run on, every generated journal is
+stamped with that UUID in both the page CRDT (`AuthorIdsBlock` in `.rm`) and
+the document content (`cPages.uuids[0].first` in `.content`).
+
+There's no official reMarkable documentation about what the cloud or device
+actually does with this UUID, so both behaviors (per-run random vs. fixed to
+your account) work fine in practice — this is just about which "feels right"
+for your library.
+
 ### Templates
 
 Journals are **native reMarkable notebooks** that reference one of the device's
