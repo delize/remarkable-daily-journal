@@ -25,7 +25,19 @@ shellcheck --severity=warning *.sh scripts/*.sh
 for f in *.sh scripts/*.sh; do bash -n "$f"; done
 ```
 
-CI runs the same three checks plus a Docker build.
+CI runs the same checks plus Hadolint, actionlint, gitleaks, a Trivy image
+scan, and a Docker build.
+
+### Optional: pre-commit hooks
+
+The repo ships a [pre-commit](https://pre-commit.com) config that mirrors the
+CI lint/security jobs locally, so you catch the same issues before pushing:
+
+```bash
+brew install pre-commit          # or: pipx install pre-commit
+pre-commit install               # registers the git hook
+pre-commit run --all-files       # run all hooks on demand
+```
 
 ## Branches and PRs
 
