@@ -10,10 +10,10 @@ services:
     image: remarkable-daily-journal:latest
     container_name: remarkable-daily-journal
     restart: unless-stopped
-    
+
     # Run in scheduled daemon mode
     command: schedule
-    
+
     # Persist rmapi authentication - choose ONE option:
     volumes:
       # Option A: Docker named volume (managed by Docker)
@@ -26,14 +26,14 @@ services:
     environment:
       # Timezone - set to your local timezone
       - TZ=Europe/Stockholm
-      
+
       # Schedule: when to create daily notes (cron format)
       # Default: 6:00 AM daily
       - CRON_SCHEDULE=0 6 * * *
-      
+
       # reMarkable folder to store daily journals
       - REMARKABLE_FOLDER=/Daily Journal
-      
+
       # Date format for the notebook name
       - DATE_FORMAT=%Y-%m-%d
 

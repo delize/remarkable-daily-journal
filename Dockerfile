@@ -12,16 +12,21 @@
 # master, untagged. Override RMAPI_VERSION with a commit SHA to pin for
 # reproducibility once a known-good commit is identified.
 FROM golang:1.23-alpine AS builder
-ARG RMAPI_VERSION=master
-RUN apk add --no-cache git && \
-    git clone --depth 1 --branch ${RMAPI_VERSION} https://github.com/ddvk/rmapi.git /src/rmapi && \
-    cd /src/rmapi && \
+# Pinned to a known-good ddvk/rmapi commit for reproducibility. Bump
+# deliberately (e.g. when ddvk publishes a fix or chases a cloud-API change)
+# rather than tracking master, so the image isn't subject to surprise upstream
+# changes between builds.
+ARG RMAPI_VERSION=434da60d178dd04e0659fb502ea1251600c5d6ef
+RUN apk add --no-cache git
+WORKDIR /src/rmapi
+RUN git clone https://github.com/ddvk/rmapi.git . && \
+    git checkout --quiet ${RMAPI_VERSION} && \
     CGO_ENABLED=0 go build \
       -ldflags "-s -w -X github.com/juruen/rmapi/version.Version=${RMAPI_VERSION}" \
       -o /go/bin/rmapi .
 
 # Runtime image
-FROM alpine:3.19
+FROM alpine:3.20
 
 # User/group configuration (can be overridden at build time)
 ARG PUID=1000

@@ -167,14 +167,14 @@ case "${1:-run}" in
             log "Expected location: $CONFIG_FILE"
         fi
         ;;
-    
+
     run)
         # One-shot mode: cleanup old journal and create today's note
         log "Running one-shot daily journal creation..."
         /app/cleanup-old-journals.sh || log "Cleanup step completed (or skipped)"
         /app/create-daily-note.sh
         ;;
-    
+
     schedule)
         # Daemon mode: run on schedule
         log "Starting scheduled daily journal creator"
@@ -275,7 +275,7 @@ case "${1:-run}" in
             sleep $((60 - $(date +%S)))
         done
         ;;
-    
+
     test)
         # Test mode: verify everything works
         log "Testing configuration..."
@@ -305,12 +305,12 @@ case "${1:-run}" in
         DRY_RUN=true /app/create-daily-note.sh
         log "✓ All tests passed"
         ;;
-    
+
     shell)
         # Drop into shell for debugging
         exec /bin/bash
         ;;
-    
+
     *)
         echo "Usage: docker run remarkable-daily-journal [command]"
         echo ""

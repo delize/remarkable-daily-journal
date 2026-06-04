@@ -89,17 +89,17 @@ Edit `docker-compose.yml` to customize:
 environment:
   # Your timezone
   - TZ=Europe/Stockholm
-  
+
   # When to create notes (cron format)
   # Examples:
   #   0 6 * * *     = 6:00 AM daily
   #   0 5 * * 1-5   = 5:00 AM weekdays only
   #   0 7 * * 0     = 7:00 AM Sundays only
   - CRON_SCHEDULE=0 6 * * *
-  
+
   # Folder on reMarkable (created automatically)
   - REMARKABLE_FOLDER=/Daily Journal
-  
+
   # Notebook name format (ISO date recommended for sorting)
   - DATE_FORMAT=%Y-%m-%d
 
