@@ -1,0 +1,42 @@
+name: Feature request
+description: Suggest a new feature or enhancement.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case. Why is the current behavior insufficient?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you like it to work? Configuration, defaults, edge cases.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you ruled out, and why.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: hardware
+    attributes:
+      label: reMarkable hardware (if hardware-specific)
+      multiple: true
+      options:
+        - rmpp (Paper Pro)
+        - rmppm (Paper Pro Move)
+        - rm2 (reMarkable 2)
+        - rm1 (reMarkable 1)
+        - N/A
+    validations:
+      required: false
