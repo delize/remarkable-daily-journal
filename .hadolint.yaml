@@ -1,0 +1,12 @@
+# Hadolint configuration.
+# https://github.com/hadolint/hadolint#configure
+
+ignored:
+  # DL3018: Pin versions in apk add.
+  # Intentionally unpinned. We want each `--no-cache` build to pick up the
+  # current Alpine package set so security fixes land automatically. Dependabot
+  # does not manage in-Dockerfile apk pins, so pinning them creates exactly the
+  # staleness we are trying to avoid (and they would have to be bumped by hand
+  # every time Alpine moves). The Alpine base image itself is pinned and bumped
+  # by Dependabot, which is the layer where reproducibility matters.
+  - DL3018

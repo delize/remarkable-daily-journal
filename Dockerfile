@@ -17,9 +17,9 @@ FROM golang:1.23-alpine AS builder
 # rather than tracking master, so the image isn't subject to surprise upstream
 # changes between builds.
 ARG RMAPI_VERSION=434da60d178dd04e0659fb502ea1251600c5d6ef
-RUN apk add --no-cache git && \
-    git clone https://github.com/ddvk/rmapi.git /src/rmapi && \
-    cd /src/rmapi && \
+RUN apk add --no-cache git
+WORKDIR /src/rmapi
+RUN git clone https://github.com/ddvk/rmapi.git . && \
     git checkout --quiet ${RMAPI_VERSION} && \
     CGO_ENABLED=0 go build \
       -ldflags "-s -w -X github.com/juruen/rmapi/version.Version=${RMAPI_VERSION}" \

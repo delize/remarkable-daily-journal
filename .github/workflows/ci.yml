@@ -56,13 +56,63 @@ jobs:
           done
           echo "All scripts passed syntax check!"
 
+  hadolint:
+    name: Hadolint (Dockerfile)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.3.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+
+  actionlint:
+    name: Actionlint (Workflows)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install actionlint
+        run: |
+          ACTIONLINT_VERSION=1.7.12
+          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin actionlint
+          actionlint -version
+
+      - name: Lint workflows
+        run: actionlint -color
+
+  secrets-scan:
+    name: Secrets Scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so gitleaks can scan every commit, not just HEAD.
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          GITLEAKS_VERSION=8.30.1
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Scan repository (history + working tree)
+        run: gitleaks detect --no-banner --verbose --redact --exit-code 1
+
   #############################################
   # Stage 2: Unit Tests
   #############################################
   unit-tests:
     name: Unit Tests (Bats)
     runs-on: ubuntu-latest
-    needs: [lint, syntax]
+    needs: [lint, syntax, hadolint, actionlint, secrets-scan]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -72,12 +122,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bats
 
-      - name: Install ghostscript (for PDF tests)
-        run: sudo apt-get install -y ghostscript
-
       - name: Run bats tests
         run: |
-          chmod +x *.sh
+          chmod +x ./*.sh
           bats tests/*.bats
 
   #############################################
@@ -131,8 +178,12 @@ jobs:
 
           echo "All Docker tests passed!"
 
-      # Catch HIGH/CRITICAL CVEs in the runtime image before any push.
-      # ignore-unfixed=true: skip vulns with no upstream fix (otherwise mostly noise).
+      # Catch HIGH/CRITICAL CVEs in OS packages (the part we control via the
+      # Alpine base — Dependabot bumps it). Scope is intentionally OS only:
+      # library-level findings are dominated by Go stdlib CVEs in the rmapi
+      # binary, which depend on ddvk/rmapi's pinned Go version and cannot be
+      # fixed from this repo. Those are tracked separately by deliberate
+      # RMAPI_VERSION bumps; gating CI on them would block every release.
       - name: Scan image for CVEs (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -140,7 +191,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
           ignore-unfixed: true
-          vuln-type: os,library
+          vuln-type: os
 
       # Push steps only run on main branch or tags, not on PRs
       - name: Log in to Container Registry
@@ -187,10 +238,14 @@ jobs:
 
       - name: Summary
         if: github.event_name != 'pull_request'
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          echo "## Docker Image Published" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Images pushed:**" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Docker Image Published"
+            echo ""
+            echo "**Images pushed:**"
+            echo '```'
+            echo "${IMAGE_TAGS}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
