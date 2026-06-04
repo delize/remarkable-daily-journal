@@ -134,7 +134,7 @@ jobs:
       # Catch HIGH/CRITICAL CVEs in the runtime image before any push.
       # ignore-unfixed=true: skip vulns with no upstream fix (otherwise mostly noise).
       - name: Scan image for CVEs (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: remarkable-daily-journal:test
           severity: HIGH,CRITICAL
