@@ -21,6 +21,13 @@ permissions:
   contents: write
   pull-requests: write
 
+# Don't overlap with another in-progress refresh (e.g. a manual dispatch landing
+# while the scheduled run is mid-firmware-download). Queue rather than cancel,
+# since partial refreshes can leave the assets/ tree mixed across firmwares.
+concurrency:
+  group: update-templates
+  cancel-in-progress: false
+
 jobs:
   update-templates:
     name: Refresh templates from latest firmware
