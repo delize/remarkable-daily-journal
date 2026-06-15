@@ -11,7 +11,7 @@
 # failed with status 400". The fixes (ddvk/rmapi #57, #62, #67) only exist on
 # master, untagged. Override RMAPI_VERSION with a commit SHA to pin for
 # reproducibility once a known-good commit is identified.
-FROM golang:1.23-alpine AS builder
+FROM golang:1.26-alpine AS builder
 # Pinned to a known-good ddvk/rmapi commit for reproducibility. Bump
 # deliberately (e.g. when ddvk publishes a fix or chases a cloud-API change)
 # rather than tracking master, so the image isn't subject to surprise upstream
