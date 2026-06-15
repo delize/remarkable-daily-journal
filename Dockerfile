@@ -26,7 +26,7 @@ RUN git clone https://github.com/ddvk/rmapi.git . && \
       -o /go/bin/rmapi .
 
 # Runtime image
-FROM alpine:3.20
+FROM alpine:3.24
 
 # User/group configuration (can be overridden at build time)
 ARG PUID=1000
