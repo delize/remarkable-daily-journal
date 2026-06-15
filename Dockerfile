@@ -26,7 +26,7 @@ RUN git clone https://github.com/ddvk/rmapi.git . && \
       -o /go/bin/rmapi .
 
 # Runtime image
-FROM alpine:3.20
+FROM alpine:3.24
 
 # User/group configuration (can be overridden at build time)
 ARG PUID=1000
@@ -34,7 +34,10 @@ ARG PGID=1000
 
 # Install dependencies
 # Note: crond is included in busybox (part of Alpine base)
-RUN apk add --no-cache \
+# `apk upgrade` pulls patched packages (e.g. libcrypto3/libssl3) on top of the
+# base image, which can ship stale versions between Alpine point releases.
+RUN apk update && apk upgrade --no-cache && \
+    apk add --no-cache \
     bash \
     tzdata \
     unzip \
