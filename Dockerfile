@@ -34,7 +34,10 @@ ARG PGID=1000
 
 # Install dependencies
 # Note: crond is included in busybox (part of Alpine base)
-RUN apk add --no-cache \
+# `apk upgrade` pulls patched packages (e.g. libcrypto3/libssl3) on top of the
+# base image, which can ship stale versions between Alpine point releases.
+RUN apk update && apk upgrade --no-cache && \
+    apk add --no-cache \
     bash \
     tzdata \
     unzip \
