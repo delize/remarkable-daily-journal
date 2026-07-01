@@ -57,7 +57,7 @@ jobs:
           done
 
       - name: Open PR if templates changed
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           branch: chore/update-templates
           title: 'chore: refresh reMarkable template lists'
