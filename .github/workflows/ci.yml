@@ -196,7 +196,7 @@ jobs:
       # Push steps only run on main branch or tags, not on PRs
       - name: Log in to Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
