@@ -383,7 +383,7 @@ EOF
     echo "not an image" > "$bad"
     run env TEMPLATE_PDF="$bad" JOURNAL_NAME=badpng OUTPUT_FILE="$BATS_TEST_TMPDIR/badpng.rmdoc" "$SCRIPT"
     [ "$status" -ne 0 ]
-    echo "$output" | grep -qi 'failed to convert TEMPLATE_PDF image'
+    echo "$output" | grep -qi 'img2pdf failed to convert TEMPLATE_PDF'
 }
 
 @test "TEMPLATE_DOC errors clearly when the fetched document has no embedded PDF" {

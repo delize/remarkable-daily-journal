@@ -119,8 +119,8 @@ if [ -n "$TEMPLATE_PDF" ]; then
     *.png|*.jpg|*.jpeg)
       command -v img2pdf >/dev/null 2>&1 || { echo "ERROR: 'img2pdf' not found (required to wrap a PNG/JPG TEMPLATE_PDF)" >&2; exit 1; }
       WRAPPED_PDF="$WORK/wrapped-input.pdf"
-      img2pdf "$TEMPLATE_PDF" -o "$WRAPPED_PDF" 2>/dev/null \
-        || { echo "ERROR: failed to convert TEMPLATE_PDF image to PDF (is it a valid PNG/JPG?): $TEMPLATE_PDF" >&2; exit 1; }
+      img2pdf "$TEMPLATE_PDF" -o "$WRAPPED_PDF" \
+        || { echo "ERROR: img2pdf failed to convert TEMPLATE_PDF to PDF: $TEMPLATE_PDF (see its message above)" >&2; exit 1; }
       PDF_PATH="$WRAPPED_PDF"
       ;;
     *)
