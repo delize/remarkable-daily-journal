@@ -24,10 +24,17 @@
 #                       reMarkable template name (default: lined -> "P Lines medium")
 #   TEMPLATE_PDF      - Optional: path to a PDF to use as the page background
 #                       instead of TEMPLATE_STYLE. Mutually exclusive with
-#                       TEMPLATE_DOC. See generate-native-journal.sh / README.
+#                       TEMPLATE_DOC. Produces a plain PDF upload by default
+#                       (proven-safe path; see generate-native-journal.sh's
+#                       header for why). See also README.
 #   TEMPLATE_DOC      - Optional: cloud path of an existing PDF-backed document
 #                       to reuse as the page background. Mutually exclusive
 #                       with TEMPLATE_PDF. See generate-native-journal.sh / README.
+#   TEMPLATE_PDF_NATIVE_EXPERIMENTAL
+#                     - "true" to build an experimental native .rmdoc bundle
+#                       for TEMPLATE_PDF/TEMPLATE_DOC instead of a plain PDF
+#                       upload. NOT independently verified on real hardware —
+#                       see docs/decisions/0001-custom-pdf-page-backgrounds.md.
 #   AUTHOR_UUID       - Optional canonical UUID stamped into every page so the
 #                       device sees these journals as authored by you. Default:
 #                       a fresh random UUID per journal. See README for how to
@@ -49,6 +56,7 @@ DATE_FORMAT="${DATE_FORMAT:-%Y-%m-%d}"
 JOURNAL_NAME_FORMAT="${JOURNAL_NAME_FORMAT:-$DATE_FORMAT}"
 TEMPLATE_PAGES="${TEMPLATE_PAGES:-1}"
 TEMPLATE_STYLE="${TEMPLATE_STYLE:-lined}"
+TEMPLATE_PDF_NATIVE_EXPERIMENTAL="${TEMPLATE_PDF_NATIVE_EXPERIMENTAL:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 
 # Portable date parser: works with both GNU coreutils `date -d` (Alpine, the
@@ -96,22 +104,33 @@ log() {
 
 log "Creating daily journal: $JOURNAL_NAME"
 log "Target folder: $REMARKABLE_FOLDER"
+PDF_SOURCE_ACTIVE=false
+if [ -n "${TEMPLATE_PDF:-}" ] || [ -n "${TEMPLATE_DOC:-}" ]; then
+    PDF_SOURCE_ACTIVE=true
+fi
 if [ -n "${TEMPLATE_PDF:-}" ]; then
-    log "Template: PDF background ($TEMPLATE_PDF), pages: $TEMPLATE_PAGES"
+    log "Template: PDF background ($TEMPLATE_PDF), native_experimental=$TEMPLATE_PDF_NATIVE_EXPERIMENTAL"
 elif [ -n "${TEMPLATE_DOC:-}" ]; then
-    log "Template: PDF background (cloud doc: $TEMPLATE_DOC), pages: $TEMPLATE_PAGES"
+    log "Template: PDF background (cloud doc: $TEMPLATE_DOC), native_experimental=$TEMPLATE_PDF_NATIVE_EXPERIMENTAL"
 else
     log "Template: $TEMPLATE_STYLE, pages: $TEMPLATE_PAGES"
 fi
 
 # Build the native notebook. rmapi put uses the file's basename as the cloud
-# visibleName, so name the .rmdoc after JOURNAL_NAME (slashes → dashes so an
-# unusual JOURNAL_NAME_FORMAT can't escape the temp dir).
+# visibleName, so name the output after JOURNAL_NAME (slashes → dashes so an
+# unusual JOURNAL_NAME_FORMAT can't escape the temp dir). A PDF source without
+# the experimental flag produces a plain .pdf (rmapi dispatches upload
+# behavior from the file extension); everything else produces a .rmdoc bundle.
 SAFE_NAME="${JOURNAL_NAME//\//-}"
-RMDOC_FILE="$TEMP_DIR/$SAFE_NAME.rmdoc"
+if [ "$PDF_SOURCE_ACTIVE" = "true" ] && [ "$TEMPLATE_PDF_NATIVE_EXPERIMENTAL" != "true" ]; then
+    RMDOC_FILE="$TEMP_DIR/$SAFE_NAME.pdf"
+else
+    RMDOC_FILE="$TEMP_DIR/$SAFE_NAME.rmdoc"
+fi
 JOURNAL_NAME="$JOURNAL_NAME" \
 TEMPLATE_STYLE="$TEMPLATE_STYLE" \
 TEMPLATE_PAGES="$TEMPLATE_PAGES" \
+TEMPLATE_PDF_NATIVE_EXPERIMENTAL="$TEMPLATE_PDF_NATIVE_EXPERIMENTAL" \
 OUTPUT_FILE="$RMDOC_FILE" \
     "$SCRIPT_DIR/generate-native-journal.sh"
 

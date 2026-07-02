@@ -1,52 +1,84 @@
 #!/usr/bin/env bash
 # Generate a native reMarkable notebook (.rmdoc) that references a built-in
-# device template, instead of rendering a PDF with Ghostscript. Optionally, a
-# page can instead be backed by a real user-supplied PDF (TEMPLATE_PDF /
-# TEMPLATE_DOC) via reMarkable's own PDF-page-redirection mechanism
-# (cPages.pages[].redir) — see README's "Custom PDF backgrounds" section.
+# device template, instead of rendering a PDF with Ghostscript.
+#
+# Optionally, TEMPLATE_PDF/TEMPLATE_DOC swap the page background for a real
+# user-supplied PDF (or a PNG/JPG, auto-wrapped into a PDF via img2pdf).
+#
+# SAFETY NOTE (read before touching TEMPLATE_PDF/TEMPLATE_DOC): an earlier
+# version of this feature hand-built reMarkable's per-page sync structure
+# (cPages.pages[] with redir/template entries) on a document that had never
+# been opened by the tablet, and that crash-looped a real device. cPages is
+# CRDT sync state the device itself is supposed to construct, not something
+# safe to precompute and ship cold. See
+# docs/decisions/0001-custom-pdf-page-backgrounds.md for the incident.
+#
+# The default behavior now matches `rmapi put somefile.pdf` exactly — the
+# proven-safe path millions of rmapi users already rely on: the resolved PDF
+# is written out as a plain .pdf file (not a notebook bundle), with NO
+# hand-built cPages/redir at all. The tablet lazily constructs its own page
+# structure the first time a human opens it, same as any normal PDF import.
+#
+# TEMPLATE_PDF_NATIVE_EXPERIMENTAL=true switches to an EXPERIMENTAL variant
+# that still builds our own .rmdoc bundle (so AUTHOR_UUID/CREATED_TIME_MS
+# backfill still work), but leaves cPages entirely at its pristine, empty
+# "never opened" default — no page loop, no redir/template entries. This is
+# a new, less-tested hypothesis than the default path: only the CRDT page
+# array was implicated in the crash, and this variant never builds one, but
+# it has NOT been independently verified on real hardware. Off by default.
 #
 # The device already holds the templates, so we only reference one by name in
 # the page's .content (cPages.pages[].template.value). Each page clones a blank
 # v6 .rm stencil; the device draws the template background itself.
 #
 # Requires: jq, zip, and a v6 blank-page stencil (assets/blank-page.rm) plus a
-# base content template (assets/base.content.json). qpdf is required only when
-# TEMPLATE_PDF/TEMPLATE_DOC is set (to read the source PDF's page count).
+# base content template (assets/base.content.json). img2pdf is required only
+# to wrap a PNG/JPG TEMPLATE_PDF. qpdf is optional (used only for a cosmetic
+# page-count in the experimental native variant); nothing requires it to be
+# accurate or even present.
 #
 # Env / args:
 #   TEMPLATE_STYLE   friendly alias or raw template name (default: lined)
 #                      blank | lined | grid | checklist  -> mapped below
 #                      anything else is passed through verbatim, so any device
 #                      template works, e.g. TEMPLATE_STYLE="P Dots S"
-#   TEMPLATE_PAGES   number of pages (default: 1). The device's "add page"
-#                      action copies the template from cPages.lastOpened (set
-#                      below to the first page), so one page is enough — pages
-#                      added on the device inherit the template.
+#   TEMPLATE_PAGES   number of pages (default: 1). Ignored when TEMPLATE_PDF/
+#                      TEMPLATE_DOC is set (see above — the tablet decides its
+#                      own page structure for a PDF-backed document).
 #   TEMPLATE_HARDWARE  device whose template list to validate against
 #                      (default: rmpp). Picks assets/templates/<hw>.json, e.g.
 #                      rmpp, rm2, rm1. Validation only warns; never blocks.
 #   TEMPLATE_PDF     path to a PDF (or a PNG/JPG image, auto-wrapped into a
-#                      1-page PDF via img2pdf) to use as page background(s),
-#                      instead of a built-in template. Pages 1..N (N = the
-#                      source's page count) redirect to the matching PDF page;
-#                      any remaining pages (when TEMPLATE_PAGES > N) fall back
-#                      to TEMPLATE_STYLE. Mutually exclusive with TEMPLATE_DOC.
+#                      1-page PDF via img2pdf) to use as the journal's page
+#                      background, instead of a built-in template. Mutually
+#                      exclusive with TEMPLATE_DOC.
 #   TEMPLATE_DOC     cloud path (rmapi) of an existing PDF-backed document to
-#                      reuse as page background(s); fetched with `rmapi get`.
+#                      reuse as the page background; fetched with `rmapi get`.
 #                      Errors if the fetched document has no embedded PDF.
 #                      Mutually exclusive with TEMPLATE_PDF.
+#   TEMPLATE_PDF_NATIVE_EXPERIMENTAL
+#                    "true" to use the experimental native-.rmdoc variant
+#                      described above, instead of the default plain-PDF
+#                      passthrough. Default: false. No effect unless
+#                      TEMPLATE_PDF/TEMPLATE_DOC is also set.
 #   JOURNAL_NAME     notebook visibleName (default: today's date, YYYY-MM-DD)
-#   OUTPUT_FILE      output .rmdoc path (default: ./<JOURNAL_NAME>.rmdoc)
+#   OUTPUT_FILE      output path (default: ./<JOURNAL_NAME>.rmdoc). When a PDF
+#                      is in play and TEMPLATE_PDF_NATIVE_EXPERIMENTAL is not
+#                      set, the actual output is always written with a .pdf
+#                      extension regardless of what's requested here (rmapi
+#                      dispatches upload behavior from the file extension).
 #   AUTHOR_UUID      canonical UUID stamped into both the page's AuthorIdsBlock
 #                      (.rm bytes) and cPages.uuids[0].first (.content JSON).
 #                      Default: a fresh random UUID per journal. Set this to
 #                      your own account's author UUID if you want every journal
 #                      to be tagged as authored by you (see README for how to
-#                      extract it from one of your existing notebooks).
+#                      extract it from one of your existing notebooks). Not
+#                      used in the default plain-PDF-passthrough mode.
 #   CREATED_TIME_MS  millisecond epoch stamped into .metadata.createdTime,
 #                      .lastModified, and per-page modifed. Default: now.
 #                      Set this (e.g. from create-daily-note.sh's backfill arg)
-#                      to make the journal's creation date match its name.
+#                      to make the journal's creation date match its name. Not
+#                      used in the default plain-PDF-passthrough mode.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,6 +91,7 @@ TEMPLATE_STYLE="${TEMPLATE_STYLE:-lined}"
 TEMPLATE_PAGES="${TEMPLATE_PAGES:-1}"
 TEMPLATE_PDF="${TEMPLATE_PDF:-}"
 TEMPLATE_DOC="${TEMPLATE_DOC:-}"
+TEMPLATE_PDF_NATIVE_EXPERIMENTAL="${TEMPLATE_PDF_NATIVE_EXPERIMENTAL:-false}"
 JOURNAL_NAME="${JOURNAL_NAME:-$(date +%Y-%m-%d)}"
 OUTPUT_FILE="${OUTPUT_FILE:-./${JOURNAL_NAME}.rmdoc}"
 
@@ -85,8 +118,9 @@ fi
 
 # Validate the requested template against the known list (assets/templates.json).
 # This never blocks: firmware sets vary, so an unrecognised name may still be a
-# real template on the device. We only warn so typos are noticed.
-if [ -f "$TEMPLATES_JSON" ]; then
+# real template on the device. We only warn so typos are noticed. Skipped
+# entirely once a PDF is in play (no built-in template is referenced then).
+if [ -z "$TEMPLATE_PDF" ] && [ -z "$TEMPLATE_DOC" ] && [ -f "$TEMPLATES_JSON" ]; then
   if jq -e --arg t "$RM_TEMPLATE" 'any(.templates[]; .filename == $t)' "$TEMPLATES_JSON" >/dev/null 2>&1; then
     : # known template
   else
@@ -148,13 +182,33 @@ elif [ -n "$TEMPLATE_DOC" ]; then
   PDF_PATH="$SRC_PDF"
 fi
 
-PDF_PAGE_COUNT=0
-PDF_SIZE_BYTES=0
 if [ -n "$PDF_PATH" ]; then
-  command -v qpdf >/dev/null 2>&1 || { echo "ERROR: 'qpdf' not found (required for TEMPLATE_PDF/TEMPLATE_DOC)" >&2; exit 1; }
-  PDF_PAGE_COUNT="$(qpdf --show-npages "$PDF_PATH" 2>/dev/null)" \
-    || { echo "ERROR: failed to read PDF page count (is it a valid PDF?): $PDF_PATH" >&2; exit 1; }
-  PDF_SIZE_BYTES="$(wc -c < "$PDF_PATH" | tr -d ' ')"
+  head -c5 "$PDF_PATH" | grep -q '^%PDF-' \
+    || { echo "ERROR: resolved PDF source doesn't look like a PDF (missing %PDF- header): $PDF_PATH" >&2; exit 1; }
+fi
+
+###############################################################################
+# Default, proven-safe path: TEMPLATE_PDF/TEMPLATE_DOC without the
+# experimental flag just writes out a plain .pdf file. No custom bundle, no
+# hand-built cPages — identical in spirit to `rmapi put somefile.pdf`.
+###############################################################################
+if [ -n "$PDF_PATH" ] && [ "$TEMPLATE_PDF_NATIVE_EXPERIMENTAL" != "true" ]; then
+  OUT_ABS="$(cd "$(dirname "$OUTPUT_FILE")" && pwd)/$(basename "$OUTPUT_FILE")"
+  REAL_OUT="${OUT_ABS%.*}.pdf"
+  if [ "$REAL_OUT" != "$OUT_ABS" ]; then
+    echo "NOTE: writing $REAL_OUT (not $OUT_ABS) — a plain PDF, not a notebook bundle." >&2
+  fi
+  rm -f "$REAL_OUT"
+  cp "$PDF_PATH" "$REAL_OUT"
+  echo "Generated: $REAL_OUT"
+  echo "  name=$JOURNAL_NAME  pdf=$PDF_PATH  (plain PDF passthrough; upload with rmapi put, same as any PDF import)"
+  exit 0
+fi
+
+if [ -n "$PDF_PATH" ]; then
+  echo "WARNING: TEMPLATE_PDF_NATIVE_EXPERIMENTAL=true — building a hand-crafted native .rmdoc bundle." >&2
+  echo "         This variant has not been independently verified on real hardware. See" >&2
+  echo "         docs/decisions/0001-custom-pdf-page-backgrounds.md before trusting it." >&2
 fi
 
 # Resolve and validate the author UUID. Default: a fresh random one per
@@ -206,52 +260,77 @@ idx_key() {
   echo "${ALPHA:$((num/62)):1}${ALPHA:$((num%62)):1}"
 }
 
-# Build the pages array. Pages 1..PDF_PAGE_COUNT (when a PDF is in play)
-# redirect to the matching PDF page (cPages.pages[].redir) and get no .rm
-# file — reMarkable only lazily creates one on first annotation. Remaining
-# pages clone the stencil (with AUTHOR_UUID patched in) and reference the
-# built-in template, exactly as before.
+if [ -n "$PDF_PATH" ]; then
+  # Experimental native-PDF-bundle variant: NO page loop, NO cPages
+  # population at all. cPages stays at assets/base.content.json's pristine
+  # empty default (pages: [], lastOpened: {timestamp:"0:0",value:""}) —
+  # exactly the "never opened yet" shape a real device would start from,
+  # matching what rmapi's own raw-PDF upload leaves for the tablet to build
+  # itself. We only touch scalar document properties, never per-page sync
+  # state.
+  PDF_SIZE_BYTES="$(wc -c < "$PDF_PATH" | tr -d ' ')"
+  PDF_PAGE_COUNT=1
+  if command -v qpdf >/dev/null 2>&1; then
+    PDF_PAGE_COUNT="$(qpdf --show-npages "$PDF_PATH" 2>/dev/null || echo 1)"
+  fi
+
+  jq --arg uuid "$AUTHOR_UUID" --arg size "$PDF_SIZE_BYTES" --argjson n "$PDF_PAGE_COUNT" \
+    '.cPages.uuids = [ { first: $uuid, second: 1 } ]
+     | .fileType = "pdf"
+     | .pageCount = $n
+     | .sizeInBytes = $size' \
+    "$BASE_CONTENT" > "$WORK/$DOCID.content"
+
+  jq -n --arg name "$JOURNAL_NAME" --arg ts "$CREATED_TIME_MS" \
+    '{
+       createdTime: $ts, lastModified: $ts, lastOpened: "0", lastOpenedPage: -1,
+       new: true, parent: "", pinned: false, source: "",
+       type: "DocumentType", visibleName: $name
+     }' > "$WORK/$DOCID.metadata"
+
+  cp "$PDF_PATH" "$WORK/$DOCID.pdf"
+
+  OUT_ABS="$(cd "$(dirname "$OUTPUT_FILE")" && pwd)/$(basename "$OUTPUT_FILE")"
+  rm -f "$OUT_ABS"
+  ( cd "$WORK" && zip -r -X -q "$OUT_ABS" "$DOCID.content" "$DOCID.metadata" "$DOCID.pdf" )
+
+  echo "Generated: $OUT_ABS (EXPERIMENTAL native PDF bundle, unverified on hardware)"
+  echo "  name=$JOURNAL_NAME  pdf=$PDF_PATH (pdf_pages=$PDF_PAGE_COUNT)  doc=$DOCID"
+  echo "  author=$AUTHOR_UUID  createdTime=$CREATED_TIME_MS"
+  exit 0
+fi
+
+###############################################################################
+# Default notebook path (no PDF at all): unchanged from before.
+###############################################################################
+
+# Build the pages array, cloning the stencil (with AUTHOR_UUID patched in)
+# for each page.
 pages='[]'
 for i in $(seq 1 "$TEMPLATE_PAGES"); do
   pid="$(gen_uuid)"
-  if [ -n "$PDF_PATH" ] && [ "$i" -le "$PDF_PAGE_COUNT" ]; then
-    pages="$(jq \
-      --arg id "$pid" --arg idx "$(idx_key "$i")" \
-      --argjson redir "$((i - 1))" --arg ts "$CREATED_TIME_MS" \
-      '. += [{
-         id: $id,
-         idx:     { timestamp: "1:2", value: $idx },
-         modifed: $ts,
-         redir:   { timestamp: "1:1", value: $redir }
-       }]' <<<"$pages")"
-  else
-    patch_stencil_uuid "$STENCIL" "$WORK/$DOCID/$pid.rm"
-    pages="$(jq \
-      --arg id "$pid" --arg idx "$(idx_key "$i")" \
-      --arg tmpl "$RM_TEMPLATE" --arg ts "$CREATED_TIME_MS" \
-      '. += [{
-         id: $id,
-         idx:      { timestamp: "1:2", value: $idx },
-         modifed:  $ts,
-         template: { timestamp: "1:1", value: $tmpl }
-       }]' <<<"$pages")"
-  fi
+  patch_stencil_uuid "$STENCIL" "$WORK/$DOCID/$pid.rm"
+  pages="$(jq \
+    --arg id "$pid" --arg idx "$(idx_key "$i")" \
+    --arg tmpl "$RM_TEMPLATE" --arg ts "$CREATED_TIME_MS" \
+    '. += [{
+       id: $id,
+       idx:      { timestamp: "1:2", value: $idx },
+       modifed:  $ts,
+       template: { timestamp: "1:1", value: $tmpl }
+     }]' <<<"$pages")"
 done
 
 # .content: inject pages + count into the known-good base template, point
 # cPages.lastOpened at the first page so pages added on the device inherit
 # its template (xochitl's add-page copies the template from lastOpened's
 # page), and stamp cPages.uuids[0].first with the same identity that we
-# wrote into the stencil's AuthorIdsBlock. When a PDF is in play, also mark
-# the document as PDF-backed (fileType/coverPageNumber/sizeInBytes).
+# wrote into the stencil's AuthorIdsBlock.
 jq --argjson pages "$pages" --argjson n "$TEMPLATE_PAGES" --arg uuid "$AUTHOR_UUID" \
-  --argjson has_pdf "$([ -n "$PDF_PATH" ] && echo true || echo false)" \
-  --arg size "$PDF_SIZE_BYTES" \
   '.cPages.pages = $pages
    | .cPages.lastOpened = { timestamp: "1:1", value: $pages[0].id }
    | .cPages.uuids = [ { first: $uuid, second: 1 } ]
-   | .pageCount = $n
-   | if $has_pdf then .fileType = "pdf" | .coverPageNumber = 0 | .sizeInBytes = $size else . end' \
+   | .pageCount = $n' \
   "$BASE_CONTENT" > "$WORK/$DOCID.content"
 
 # .metadata
@@ -262,21 +341,11 @@ jq -n --arg name "$JOURNAL_NAME" --arg ts "$CREATED_TIME_MS" \
      type: "DocumentType", visibleName: $name
    }' > "$WORK/$DOCID.metadata"
 
-if [ -n "$PDF_PATH" ]; then
-  cp "$PDF_PATH" "$WORK/$DOCID.pdf"
-fi
-
 # Package as a flat .rmdoc (zip with files at the root).
 OUT_ABS="$(cd "$(dirname "$OUTPUT_FILE")" && pwd)/$(basename "$OUTPUT_FILE")"
 rm -f "$OUT_ABS"
-ZIP_ENTRIES=("$DOCID.content" "$DOCID.metadata" "$DOCID")
-[ -n "$PDF_PATH" ] && ZIP_ENTRIES+=("$DOCID.pdf")
-( cd "$WORK" && zip -r -X -q "$OUT_ABS" "${ZIP_ENTRIES[@]}" )
+( cd "$WORK" && zip -r -X -q "$OUT_ABS" "$DOCID.content" "$DOCID.metadata" "$DOCID" )
 
 echo "Generated: $OUT_ABS"
-if [ -n "$PDF_PATH" ]; then
-  echo "  name=$JOURNAL_NAME  pdf=$PDF_PATH (pdf_pages=$PDF_PAGE_COUNT)  template=$RM_TEMPLATE  pages=$TEMPLATE_PAGES  doc=$DOCID"
-else
-  echo "  name=$JOURNAL_NAME  template=$RM_TEMPLATE  pages=$TEMPLATE_PAGES  doc=$DOCID"
-fi
+echo "  name=$JOURNAL_NAME  template=$RM_TEMPLATE  pages=$TEMPLATE_PAGES  doc=$DOCID"
 echo "  author=$AUTHOR_UUID  createdTime=$CREATED_TIME_MS"

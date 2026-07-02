@@ -36,6 +36,10 @@ ARG PGID=1000
 # Note: crond is included in busybox (part of Alpine base)
 # `apk upgrade` pulls patched packages (e.g. libcrypto3/libssl3) on top of the
 # base image, which can ship stale versions between Alpine point releases.
+# qpdf is optional at runtime (only used for a cosmetic page count in the
+# experimental TEMPLATE_PDF_NATIVE_EXPERIMENTAL variant); kept installed
+# since it's small and has zero known CVEs. py3-img2pdf wraps a PNG/JPG
+# TEMPLATE_PDF into a PDF.
 RUN apk update && apk upgrade --no-cache && \
     apk add --no-cache \
     bash \

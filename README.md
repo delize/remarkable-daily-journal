@@ -219,22 +219,21 @@ changes.
 
 ### Custom PDF backgrounds
 
-> [!CAUTION]
-> **`TEMPLATE_PDF`/`TEMPLATE_DOC` are confirmed to crash-loop a real device
-> and are unsafe to use until this warning is removed.** In testing, opening
-> a freshly-generated PDF-backed journal caused the tablet to reboot
-> repeatedly; deleting the document from the cloud stopped the loop. Root
-> cause is under investigation — see
-> [docs/decisions/0001-custom-pdf-page-backgrounds.md](docs/decisions/0001-custom-pdf-page-backgrounds.md).
-> Do not set `TEMPLATE_PDF`/`TEMPLATE_DOC` against a real account/device
-> until this notice is removed.
+> [!NOTE]
+> An earlier version of this feature hand-built reMarkable's per-page sync
+> structure (`cPages.pages[].redir`) on a document the tablet had never
+> opened, and that **crash-looped a real device**. The default behavior
+> below was redesigned around that incident and has been verified on real
+> hardware (opens cleanly, no crash). See
+> [docs/decisions/0001-custom-pdf-page-backgrounds.md](docs/decisions/0001-custom-pdf-page-backgrounds.md)
+> and [docs/decisions/0002-redesign-custom-pdf-backgrounds-after-crash.md](docs/decisions/0002-redesign-custom-pdf-backgrounds-after-crash.md)
+> for the full incident and redesign. `TEMPLATE_PDF_NATIVE_EXPERIMENTAL`
+> (below) is a separate, still-**unverified-on-hardware** opt-in variant —
+> leave it off unless you specifically want to help verify it.
 
 Instead of a built-in template, a page can be backed by a real PDF (or a
 PNG/JPG, auto-wrapped into a 1-page PDF) — e.g. a downloaded planner or
-template pack. This uses reMarkable's own PDF-page mechanism
-(`cPages.pages[].redir`), the same one the tablet itself uses for any PDF you
-import — it's a genuinely different kind of page from a built-in template,
-not a workaround.
+template pack.
 
 Two mutually-exclusive sources:
 
@@ -249,12 +248,22 @@ Two mutually-exclusive sources:
 `TEMPLATE_PDF` also accepts a `.png`/`.jpg`/`.jpeg` image directly — it's
 wrapped into a 1-page PDF automatically (via `img2pdf`) before continuing.
 
-**Page mapping**: pages `1..N` (N = the source's page count) redirect to the
-matching source page; if `TEMPLATE_PAGES` is larger than N, the remaining
-pages fall back to `TEMPLATE_STYLE` as usual. There's no cycling/repeat yet —
-if you want the same custom page repeated on every page of a multi-page daily
-note, use a source with that many pages, or set `TEMPLATE_PAGES=1` (the
-default) and let the device's own add-page action carry it forward.
+**Default behavior (safe, verified)**: the resolved PDF is uploaded as a
+**plain PDF document** — no notebook bundle, no hand-built page structure at
+all. This is deliberately identical in spirit to `rmapi put somefile.pdf`,
+the same path any normal PDF import already uses safely: the tablet itself
+builds its own page structure the first time you open it. Because of this,
+`TEMPLATE_PAGES`/`TEMPLATE_STYLE` don't apply once `TEMPLATE_PDF`/`TEMPLATE_DOC`
+is set — the source PDF's own pages are what you get, and the tablet decides
+how many pages the resulting document has.
+
+**`TEMPLATE_PDF_NATIVE_EXPERIMENTAL=true`** (opt-in, off by default) instead
+builds a native `.rmdoc` bundle ourselves — keeping `AUTHOR_UUID` stamping and
+`CREATED_TIME_MS` historical-date backfill working — but leaves `cPages`
+entirely at its pristine, empty "never opened" default rather than
+pre-populating any page entries. This is a lower-risk hypothesis than what
+crashed (no CRDT page array is invented at all), but has **not been
+independently verified on real hardware** — treat it as experimental.
 
 To mount a local file, add a volume and point `TEMPLATE_PDF` at a path inside it:
 
