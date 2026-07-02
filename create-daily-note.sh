@@ -96,7 +96,13 @@ log() {
 
 log "Creating daily journal: $JOURNAL_NAME"
 log "Target folder: $REMARKABLE_FOLDER"
-log "Template: $TEMPLATE_STYLE, pages: $TEMPLATE_PAGES"
+if [ -n "${TEMPLATE_PDF:-}" ]; then
+    log "Template: PDF background ($TEMPLATE_PDF), pages: $TEMPLATE_PAGES"
+elif [ -n "${TEMPLATE_DOC:-}" ]; then
+    log "Template: PDF background (cloud doc: $TEMPLATE_DOC), pages: $TEMPLATE_PAGES"
+else
+    log "Template: $TEMPLATE_STYLE, pages: $TEMPLATE_PAGES"
+fi
 
 # Build the native notebook. rmapi put uses the file's basename as the cloud
 # visibleName, so name the .rmdoc after JOURNAL_NAME (slashes → dashes so an
