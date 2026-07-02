@@ -219,6 +219,16 @@ changes.
 
 ### Custom PDF backgrounds
 
+> [!CAUTION]
+> **`TEMPLATE_PDF`/`TEMPLATE_DOC` are confirmed to crash-loop a real device
+> and are unsafe to use until this warning is removed.** In testing, opening
+> a freshly-generated PDF-backed journal caused the tablet to reboot
+> repeatedly; deleting the document from the cloud stopped the loop. Root
+> cause is under investigation — see
+> [docs/decisions/0001-custom-pdf-page-backgrounds.md](docs/decisions/0001-custom-pdf-page-backgrounds.md).
+> Do not set `TEMPLATE_PDF`/`TEMPLATE_DOC` against a real account/device
+> until this notice is removed.
+
 Instead of a built-in template, a page can be backed by a real PDF (or a
 PNG/JPG, auto-wrapped into a 1-page PDF) — e.g. a downloaded planner or
 template pack. This uses reMarkable's own PDF-page mechanism
