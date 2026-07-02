@@ -85,6 +85,10 @@ setup() {
     grep -q "CLEANUP_" "$SCRIPT"
 }
 
+@test "export_env whitelist covers TEMPLATE_ (so TEMPLATE_PDF/TEMPLATE_DOC survive to cron)" {
+    grep -q "TEMPLATE_" "$SCRIPT"
+}
+
 @test "schedule command parses cron expression" {
     grep -q "CRON_MIN" "$SCRIPT"
     grep -q "CRON_HOUR" "$SCRIPT"

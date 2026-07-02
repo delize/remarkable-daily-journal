@@ -44,6 +44,8 @@ RUN apk update && apk upgrade --no-cache && \
     zip \
     curl \
     jq \
+    qpdf \
+    py3-img2pdf \
     ca-certificates
 
 # Copy rmapi binary from builder
@@ -70,6 +72,10 @@ RUN chmod +x /app/*.sh /app/scripts/*.sh
 
 # Config volume for rmapi authentication
 VOLUME /app/.config/rmapi
+
+# Optional: bind-mount custom PDF templates here and point TEMPLATE_PDF at a
+# file inside it, e.g. TEMPLATE_PDF=/app/templates/planner.pdf
+VOLUME /app/templates
 
 # Switch to app user
 USER app

@@ -23,6 +23,9 @@ services:
       # - ./config/rmapi:/app/.config/rmapi
       # - /path/to/your/rmapi-config:/app/.config/rmapi
 
+      # Optional: mount a folder of custom PDF templates for TEMPLATE_PDF below.
+      # - ./templates:/app/templates:ro
+
     environment:
       # Timezone - set to your local timezone
       - TZ=Europe/Stockholm
@@ -54,6 +57,16 @@ services:
       # Device whose template list to validate TEMPLATE_STYLE against (warn only).
       # rmpp = Paper Pro (default), rm2 = reMarkable 2, rm1 = reMarkable 1.
       - TEMPLATE_HARDWARE=rmpp
+
+      # Optional: use a custom PDF as the page background instead of a built-in
+      # template. Pages beyond the PDF's own page count fall back to
+      # TEMPLATE_STYLE above. Mutually exclusive with TEMPLATE_DOC.
+      # - TEMPLATE_PDF=/app/templates/planner.pdf
+
+      # Optional: reuse a PDF-backed document already on your reMarkable cloud
+      # as the page background, fetched via rmapi. Mutually exclusive with
+      # TEMPLATE_PDF; errors if the document has no embedded PDF.
+      # - TEMPLATE_DOC=/Templates/My PDF Notebook
 
       # Optional: canonical UUID stamped into every generated journal so the
       # device tags them as authored by you (instead of getting a fresh random

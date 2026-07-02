@@ -22,6 +22,12 @@
 #                       inherit the current page's template automatically.
 #   TEMPLATE_STYLE    - Template: blank, lined, grid, checklist, or any raw
 #                       reMarkable template name (default: lined -> "P Lines medium")
+#   TEMPLATE_PDF      - Optional: path to a PDF to use as the page background
+#                       instead of TEMPLATE_STYLE. Mutually exclusive with
+#                       TEMPLATE_DOC. See generate-native-journal.sh / README.
+#   TEMPLATE_DOC      - Optional: cloud path of an existing PDF-backed document
+#                       to reuse as the page background. Mutually exclusive
+#                       with TEMPLATE_PDF. See generate-native-journal.sh / README.
 #   AUTHOR_UUID       - Optional canonical UUID stamped into every page so the
 #                       device sees these journals as authored by you. Default:
 #                       a fresh random UUID per journal. See README for how to

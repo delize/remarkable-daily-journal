@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # Generate a native reMarkable notebook (.rmdoc) that references a built-in
-# device template, instead of rendering a PDF with Ghostscript.
+# device template, instead of rendering a PDF with Ghostscript. Optionally, a
+# page can instead be backed by a real user-supplied PDF (TEMPLATE_PDF /
+# TEMPLATE_DOC) via reMarkable's own PDF-page-redirection mechanism
+# (cPages.pages[].redir) — see README's "Custom PDF backgrounds" section.
 #
 # The device already holds the templates, so we only reference one by name in
 # the page's .content (cPages.pages[].template.value). Each page clones a blank
 # v6 .rm stencil; the device draws the template background itself.
 #
 # Requires: jq, zip, and a v6 blank-page stencil (assets/blank-page.rm) plus a
-# base content template (assets/base.content.json).
+# base content template (assets/base.content.json). qpdf is required only when
+# TEMPLATE_PDF/TEMPLATE_DOC is set (to read the source PDF's page count).
 #
 # Env / args:
 #   TEMPLATE_STYLE   friendly alias or raw template name (default: lined)
@@ -21,6 +25,16 @@
 #   TEMPLATE_HARDWARE  device whose template list to validate against
 #                      (default: rmpp). Picks assets/templates/<hw>.json, e.g.
 #                      rmpp, rm2, rm1. Validation only warns; never blocks.
+#   TEMPLATE_PDF     path to a PDF (or a PNG/JPG image, auto-wrapped into a
+#                      1-page PDF via img2pdf) to use as page background(s),
+#                      instead of a built-in template. Pages 1..N (N = the
+#                      source's page count) redirect to the matching PDF page;
+#                      any remaining pages (when TEMPLATE_PAGES > N) fall back
+#                      to TEMPLATE_STYLE. Mutually exclusive with TEMPLATE_DOC.
+#   TEMPLATE_DOC     cloud path (rmapi) of an existing PDF-backed document to
+#                      reuse as page background(s); fetched with `rmapi get`.
+#                      Errors if the fetched document has no embedded PDF.
+#                      Mutually exclusive with TEMPLATE_PDF.
 #   JOURNAL_NAME     notebook visibleName (default: today's date, YYYY-MM-DD)
 #   OUTPUT_FILE      output .rmdoc path (default: ./<JOURNAL_NAME>.rmdoc)
 #   AUTHOR_UUID      canonical UUID stamped into both the page's AuthorIdsBlock
@@ -43,6 +57,8 @@ TEMPLATES_JSON="${TEMPLATES_JSON:-$SCRIPT_DIR/assets/templates/${TEMPLATE_HARDWA
 
 TEMPLATE_STYLE="${TEMPLATE_STYLE:-lined}"
 TEMPLATE_PAGES="${TEMPLATE_PAGES:-1}"
+TEMPLATE_PDF="${TEMPLATE_PDF:-}"
+TEMPLATE_DOC="${TEMPLATE_DOC:-}"
 JOURNAL_NAME="${JOURNAL_NAME:-$(date +%Y-%m-%d)}"
 OUTPUT_FILE="${OUTPUT_FILE:-./${JOURNAL_NAME}.rmdoc}"
 
@@ -61,6 +77,11 @@ for dep in jq zip; do
 done
 [ -f "$STENCIL" ] || { echo "ERROR: stencil not found: $STENCIL" >&2; exit 1; }
 [ -f "$BASE_CONTENT" ] || { echo "ERROR: base content not found: $BASE_CONTENT" >&2; exit 1; }
+
+if [ -n "$TEMPLATE_PDF" ] && [ -n "$TEMPLATE_DOC" ]; then
+  echo "ERROR: TEMPLATE_PDF and TEMPLATE_DOC are mutually exclusive" >&2
+  exit 1
+fi
 
 # Validate the requested template against the known list (assets/templates.json).
 # This never blocks: firmware sets vary, so an unrecognised name may still be a
@@ -82,6 +103,59 @@ gen_uuid() {
     cat /proc/sys/kernel/random/uuid
   fi
 }
+
+DOCID="$(gen_uuid)"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$WORK/$DOCID"
+
+# Resolve TEMPLATE_PDF/TEMPLATE_DOC into a local PDF_PATH, if either is set.
+# TEMPLATE_DOC fetches an existing cloud document via rmapi and reuses its
+# embedded PDF; TEMPLATE_PDF just points straight at a mounted file.
+PDF_PATH=""
+if [ -n "$TEMPLATE_PDF" ]; then
+  [ -f "$TEMPLATE_PDF" ] || { echo "ERROR: TEMPLATE_PDF not found: $TEMPLATE_PDF" >&2; exit 1; }
+  case "$(printf '%s' "$TEMPLATE_PDF" | tr '[:upper:]' '[:lower:]')" in
+    *.png|*.jpg|*.jpeg)
+      command -v img2pdf >/dev/null 2>&1 || { echo "ERROR: 'img2pdf' not found (required to wrap a PNG/JPG TEMPLATE_PDF)" >&2; exit 1; }
+      WRAPPED_PDF="$WORK/wrapped-input.pdf"
+      img2pdf "$TEMPLATE_PDF" -o "$WRAPPED_PDF" 2>/dev/null \
+        || { echo "ERROR: failed to convert TEMPLATE_PDF image to PDF (is it a valid PNG/JPG?): $TEMPLATE_PDF" >&2; exit 1; }
+      PDF_PATH="$WRAPPED_PDF"
+      ;;
+    *)
+      PDF_PATH="$TEMPLATE_PDF"
+      ;;
+  esac
+elif [ -n "$TEMPLATE_DOC" ]; then
+  command -v rmapi >/dev/null 2>&1 || { echo "ERROR: 'rmapi' not found (required for TEMPLATE_DOC)" >&2; exit 1; }
+  FETCH_DIR="$WORK/fetch"
+  mkdir -p "$FETCH_DIR"
+  if ! (cd "$FETCH_DIR" && rmapi get "$TEMPLATE_DOC") >&2; then
+    echo "ERROR: 'rmapi get' failed for TEMPLATE_DOC: $TEMPLATE_DOC" >&2
+    exit 1
+  fi
+  BUNDLE="$(find "$FETCH_DIR" -maxdepth 1 -type f \( -name '*.rmdoc' -o -name '*.zip' \) | head -n1)"
+  [ -n "$BUNDLE" ] || { echo "ERROR: TEMPLATE_DOC fetch produced no bundle: $TEMPLATE_DOC" >&2; exit 1; }
+  UNPACK_DIR="$FETCH_DIR/unpacked"
+  mkdir -p "$UNPACK_DIR"
+  unzip -oq "$BUNDLE" -d "$UNPACK_DIR"
+  SRC_PDF="$(find "$UNPACK_DIR" -maxdepth 1 -name '*.pdf' | head -n1)"
+  if [ -z "$SRC_PDF" ]; then
+    echo "ERROR: TEMPLATE_DOC has no embedded PDF — it's a notebook, not a PDF-backed document: $TEMPLATE_DOC" >&2
+    exit 1
+  fi
+  PDF_PATH="$SRC_PDF"
+fi
+
+PDF_PAGE_COUNT=0
+PDF_SIZE_BYTES=0
+if [ -n "$PDF_PATH" ]; then
+  command -v qpdf >/dev/null 2>&1 || { echo "ERROR: 'qpdf' not found (required for TEMPLATE_PDF/TEMPLATE_DOC)" >&2; exit 1; }
+  PDF_PAGE_COUNT="$(qpdf --show-npages "$PDF_PATH" 2>/dev/null)" \
+    || { echo "ERROR: failed to read PDF page count (is it a valid PDF?): $PDF_PATH" >&2; exit 1; }
+  PDF_SIZE_BYTES="$(wc -c < "$PDF_PATH" | tr -d ' ')"
+fi
 
 # Resolve and validate the author UUID. Default: a fresh random one per
 # journal so we never leak the stencil's baked identity into the cloud.
@@ -132,38 +206,52 @@ idx_key() {
   echo "${ALPHA:$((num/62)):1}${ALPHA:$((num%62)):1}"
 }
 
-DOCID="$(gen_uuid)"
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/$DOCID"
-
-# Build the pages array, cloning the stencil (with AUTHOR_UUID patched in)
-# for each page.
+# Build the pages array. Pages 1..PDF_PAGE_COUNT (when a PDF is in play)
+# redirect to the matching PDF page (cPages.pages[].redir) and get no .rm
+# file — reMarkable only lazily creates one on first annotation. Remaining
+# pages clone the stencil (with AUTHOR_UUID patched in) and reference the
+# built-in template, exactly as before.
 pages='[]'
 for i in $(seq 1 "$TEMPLATE_PAGES"); do
   pid="$(gen_uuid)"
-  patch_stencil_uuid "$STENCIL" "$WORK/$DOCID/$pid.rm"
-  pages="$(jq \
-    --arg id "$pid" --arg idx "$(idx_key "$i")" \
-    --arg tmpl "$RM_TEMPLATE" --arg ts "$CREATED_TIME_MS" \
-    '. += [{
-       id: $id,
-       idx:      { timestamp: "1:2", value: $idx },
-       modifed:  $ts,
-       template: { timestamp: "1:1", value: $tmpl }
-     }]' <<<"$pages")"
+  if [ -n "$PDF_PATH" ] && [ "$i" -le "$PDF_PAGE_COUNT" ]; then
+    pages="$(jq \
+      --arg id "$pid" --arg idx "$(idx_key "$i")" \
+      --argjson redir "$((i - 1))" --arg ts "$CREATED_TIME_MS" \
+      '. += [{
+         id: $id,
+         idx:     { timestamp: "1:2", value: $idx },
+         modifed: $ts,
+         redir:   { timestamp: "1:1", value: $redir }
+       }]' <<<"$pages")"
+  else
+    patch_stencil_uuid "$STENCIL" "$WORK/$DOCID/$pid.rm"
+    pages="$(jq \
+      --arg id "$pid" --arg idx "$(idx_key "$i")" \
+      --arg tmpl "$RM_TEMPLATE" --arg ts "$CREATED_TIME_MS" \
+      '. += [{
+         id: $id,
+         idx:      { timestamp: "1:2", value: $idx },
+         modifed:  $ts,
+         template: { timestamp: "1:1", value: $tmpl }
+       }]' <<<"$pages")"
+  fi
 done
 
 # .content: inject pages + count into the known-good base template, point
 # cPages.lastOpened at the first page so pages added on the device inherit
 # its template (xochitl's add-page copies the template from lastOpened's
 # page), and stamp cPages.uuids[0].first with the same identity that we
-# wrote into the stencil's AuthorIdsBlock.
+# wrote into the stencil's AuthorIdsBlock. When a PDF is in play, also mark
+# the document as PDF-backed (fileType/coverPageNumber/sizeInBytes).
 jq --argjson pages "$pages" --argjson n "$TEMPLATE_PAGES" --arg uuid "$AUTHOR_UUID" \
+  --argjson has_pdf "$([ -n "$PDF_PATH" ] && echo true || echo false)" \
+  --arg size "$PDF_SIZE_BYTES" \
   '.cPages.pages = $pages
    | .cPages.lastOpened = { timestamp: "1:1", value: $pages[0].id }
    | .cPages.uuids = [ { first: $uuid, second: 1 } ]
-   | .pageCount = $n' \
+   | .pageCount = $n
+   | if $has_pdf then .fileType = "pdf" | .coverPageNumber = 0 | .sizeInBytes = $size else . end' \
   "$BASE_CONTENT" > "$WORK/$DOCID.content"
 
 # .metadata
@@ -174,11 +262,21 @@ jq -n --arg name "$JOURNAL_NAME" --arg ts "$CREATED_TIME_MS" \
      type: "DocumentType", visibleName: $name
    }' > "$WORK/$DOCID.metadata"
 
+if [ -n "$PDF_PATH" ]; then
+  cp "$PDF_PATH" "$WORK/$DOCID.pdf"
+fi
+
 # Package as a flat .rmdoc (zip with files at the root).
 OUT_ABS="$(cd "$(dirname "$OUTPUT_FILE")" && pwd)/$(basename "$OUTPUT_FILE")"
 rm -f "$OUT_ABS"
-( cd "$WORK" && zip -r -X -q "$OUT_ABS" "$DOCID.content" "$DOCID.metadata" "$DOCID" )
+ZIP_ENTRIES=("$DOCID.content" "$DOCID.metadata" "$DOCID")
+[ -n "$PDF_PATH" ] && ZIP_ENTRIES+=("$DOCID.pdf")
+( cd "$WORK" && zip -r -X -q "$OUT_ABS" "${ZIP_ENTRIES[@]}" )
 
 echo "Generated: $OUT_ABS"
-echo "  name=$JOURNAL_NAME  template=$RM_TEMPLATE  pages=$TEMPLATE_PAGES  doc=$DOCID"
+if [ -n "$PDF_PATH" ]; then
+  echo "  name=$JOURNAL_NAME  pdf=$PDF_PATH (pdf_pages=$PDF_PAGE_COUNT)  template=$RM_TEMPLATE  pages=$TEMPLATE_PAGES  doc=$DOCID"
+else
+  echo "  name=$JOURNAL_NAME  template=$RM_TEMPLATE  pages=$TEMPLATE_PAGES  doc=$DOCID"
+fi
 echo "  author=$AUTHOR_UUID  createdTime=$CREATED_TIME_MS"

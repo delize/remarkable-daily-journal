@@ -120,7 +120,7 @@ jobs:
       - name: Install bats
         run: |
           sudo apt-get update
-          sudo apt-get install -y bats
+          sudo apt-get install -y bats qpdf img2pdf
 
       - name: Run bats tests
         run: |

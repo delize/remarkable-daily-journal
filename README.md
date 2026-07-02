@@ -5,8 +5,9 @@ Automatically creates dated notebooks on your reMarkable tablet, running as a Do
 ## Features
 
 - 📅 Creates a new dated notebook every day
-- 📝 **Native reMarkable notebooks** using the device's own built-in templates (lined, grid, dots, …) — no PDF generation
+- 📝 **Native reMarkable notebooks** using the device's own built-in templates (lined, grid, dots, …) by default — no PDF generation required
 - 🎛️ Configurable template per page, including any of the device's ~70 templates, with per-hardware support
+- 🖼️ Or bring your own **custom PDF/PNG/JPG background** (`TEMPLATE_PDF`/`TEMPLATE_DOC`) for pages that need more than a built-in template
 - 🔄 Runs on a configurable schedule (default: 6:00 AM)
 - 🐳 Runs as a lightweight Docker container
 - 💾 Persistent authentication (survives container restarts)
@@ -110,6 +111,15 @@ environment:
   # Device whose template list to validate against: rmpp / rm2 / rm1
   - TEMPLATE_HARDWARE=rmpp
 
+  # Optional: use a custom PDF/PNG/JPG as the page background instead of a
+  # built-in template (see "Custom PDF backgrounds" below). Mutually exclusive
+  # with TEMPLATE_DOC.
+  # - TEMPLATE_PDF=/app/templates/planner.pdf
+
+  # Optional: reuse a PDF-backed document already on your reMarkable cloud as
+  # the page background, fetched via rmapi. Mutually exclusive with TEMPLATE_PDF.
+  # - TEMPLATE_DOC=/Templates/My PDF Notebook
+
   # Pages per notebook. 1 is enough — the generator points cPages.lastOpened
   # at page 1, and the device's add-page action copies that page's template.
   - TEMPLATE_PAGES=1
@@ -169,9 +179,10 @@ for your library.
 
 ### Templates
 
-Journals are **native reMarkable notebooks** that reference one of the device's
-built-in templates by name — the tablet renders the template itself, so there's
-no PDF and nothing template-related is uploaded.
+Journals are **native reMarkable notebooks** that, by default, reference one of
+the device's built-in templates by name — the tablet renders the template
+itself, so there's no PDF and nothing template-related is uploaded. If you want
+a custom background instead, see [Custom PDF backgrounds](#custom-pdf-backgrounds) below.
 
 Set `TEMPLATE_STYLE` to a friendly alias or any raw template name:
 
@@ -205,6 +216,56 @@ validate against your device's list.
 These lists are refreshed automatically from the latest firmware by the
 `Update template lists` workflow (every ~2 weeks), which opens a PR when the set
 changes.
+
+### Custom PDF backgrounds
+
+Instead of a built-in template, a page can be backed by a real PDF (or a
+PNG/JPG, auto-wrapped into a 1-page PDF) — e.g. a downloaded planner or
+template pack. This uses reMarkable's own PDF-page mechanism
+(`cPages.pages[].redir`), the same one the tablet itself uses for any PDF you
+import — it's a genuinely different kind of page from a built-in template,
+not a workaround.
+
+Two mutually-exclusive sources:
+
+```yaml
+# A file mounted into the container (see the /app/templates volume below)
+- TEMPLATE_PDF=/app/templates/planner.pdf
+
+# ...or a PDF-backed document already on your reMarkable cloud, fetched via rmapi
+- TEMPLATE_DOC=/Templates/My PDF Notebook
+```
+
+`TEMPLATE_PDF` also accepts a `.png`/`.jpg`/`.jpeg` image directly — it's
+wrapped into a 1-page PDF automatically (via `img2pdf`) before continuing.
+
+**Page mapping**: pages `1..N` (N = the source's page count) redirect to the
+matching source page; if `TEMPLATE_PAGES` is larger than N, the remaining
+pages fall back to `TEMPLATE_STYLE` as usual. There's no cycling/repeat yet —
+if you want the same custom page repeated on every page of a multi-page daily
+note, use a source with that many pages, or set `TEMPLATE_PAGES=1` (the
+default) and let the device's own add-page action carry it forward.
+
+To mount a local file, add a volume and point `TEMPLATE_PDF` at a path inside it:
+
+```yaml
+volumes:
+  - ./templates:/app/templates:ro
+environment:
+  - TEMPLATE_PDF=/app/templates/planner.pdf
+```
+
+Setting both `TEMPLATE_PDF` and `TEMPLATE_DOC` is an error. Neither set →
+today's built-in-template-only behavior, unchanged.
+
+**Not supported, deliberately**: `methods.remarkable.com` (reMarkable's own
+template marketplace) isn't integrated — its "Import" button is an
+authenticated first-party push straight into your reMarkable account, with no
+PDF file ever exposed to fetch programmatically; download from there yourself
+and use it as a `TEMPLATE_PDF`/`TEMPLATE_DOC` source like any other PDF. This
+also doesn't install a template into the device's own template picker for
+other documents (that requires SSH access to the device and is out of scope
+here) — it only affects the journal this tool generates.
 
 #### Different reMarkable models / screen sizes
 
@@ -503,7 +564,7 @@ PR when they change. It can also be triggered manually from the Actions tab.
 ## How It Works
 
 1. **Build stage**: Compiles `rmapi` from the [ddvk/rmapi](https://github.com/ddvk/rmapi) fork (actively maintained)
-2. **Runtime**: Alpine Linux. Each journal is assembled as a native reMarkable `.rmdoc` bundle — a fresh document UUID, pages cloning a blank v6 `.rm` stencil, with the chosen built-in template referenced in `.content` — then uploaded with `rmapi`. The device renders the template, so no PDF/Ghostscript is involved.
+2. **Runtime**: Alpine Linux. Each journal is assembled as a native reMarkable `.rmdoc` bundle — a fresh document UUID, pages cloning a blank v6 `.rm` stencil, with the chosen built-in template referenced in `.content` — then uploaded with `rmapi`. The device renders the template, so no PDF/Ghostscript rendering is involved. Optionally, a page can instead redirect to a page of a user-supplied PDF (`TEMPLATE_PDF`/`TEMPLATE_DOC`, see [Custom PDF backgrounds](#custom-pdf-backgrounds)) — the PDF is embedded as-is, never rendered by us.
 3. **Scheduling**: Uses a lightweight shell-based scheduler (no root required)
 4. **Auth storage**: Persisted in Docker volume, survives container updates
 

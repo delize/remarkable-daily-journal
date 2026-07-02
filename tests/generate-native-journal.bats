@@ -211,3 +211,205 @@ setup() {
     [ "$(jq -r '.cPages.lastOpened.value' "$dir"/*.content)" = "$first_id" ]
     [ "$(jq -r '.cPages.lastOpened.timestamp' "$dir"/*.content)" = "1:1" ]
 }
+
+#
+# TEMPLATE_PDF / TEMPLATE_DOC (custom PDF page backgrounds)
+#
+
+@test "script exposes TEMPLATE_PDF and TEMPLATE_DOC" {
+    grep -q 'TEMPLATE_PDF' "$SCRIPT"
+    grep -q 'TEMPLATE_DOC' "$SCRIPT"
+}
+
+@test "rejects setting both TEMPLATE_PDF and TEMPLATE_DOC" {
+    run env TEMPLATE_PDF="$SCRIPT_DIR/tests/fixtures/two-page.pdf" TEMPLATE_DOC=/some/cloud/path \
+        JOURNAL_NAME=both OUTPUT_FILE="$BATS_TEST_TMPDIR/both.rmdoc" "$SCRIPT"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -qi 'mutually exclusive'
+}
+
+@test "rejects a nonexistent TEMPLATE_PDF path" {
+    run env TEMPLATE_PDF="$BATS_TEST_TMPDIR/does-not-exist.pdf" \
+        JOURNAL_NAME=missing OUTPUT_FILE="$BATS_TEST_TMPDIR/missing.rmdoc" "$SCRIPT"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -qi 'TEMPLATE_PDF not found'
+}
+
+@test "rejects an invalid (non-PDF) TEMPLATE_PDF" {
+    command -v qpdf >/dev/null || skip "qpdf not available"
+    bad="$BATS_TEST_TMPDIR/bad.pdf"
+    echo "not a pdf" > "$bad"
+    run env TEMPLATE_PDF="$bad" JOURNAL_NAME=bad OUTPUT_FILE="$BATS_TEST_TMPDIR/bad-out.rmdoc" "$SCRIPT"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -qi 'PDF page count'
+}
+
+@test "TEMPLATE_PAGES <= PDF page count: every page redirects, no .rm files" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    command -v qpdf >/dev/null || skip "qpdf not available"
+    out="$BATS_TEST_TMPDIR/pdf-exact.rmdoc"
+    run env TEMPLATE_PDF="$SCRIPT_DIR/tests/fixtures/two-page.pdf" TEMPLATE_PAGES=2 \
+        JOURNAL_NAME=pdf-exact OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    dir="$BATS_TEST_TMPDIR/pdf-exact-unpacked"
+    mkdir -p "$dir"
+    unzip -oq "$out" -d "$dir"
+
+    [ "$(jq -r '.fileType' "$dir"/*.content)" = "pdf" ]
+    [ "$(jq -r '.coverPageNumber' "$dir"/*.content)" = "0" ]
+    [ "$(jq -r '.sizeInBytes' "$dir"/*.content)" = "$(wc -c < "$SCRIPT_DIR/tests/fixtures/two-page.pdf" | tr -d ' ')" ]
+    [ "$(jq -c '[.cPages.pages[].redir.value]' "$dir"/*.content)" = "$(jq -cn '[0,1]')" ]
+    [ "$(jq -r '[.cPages.pages[].template] | map(select(. != null)) | length' "$dir"/*.content)" = "0" ]
+    [ "$(find "$dir" -name '*.rm' | wc -l)" -eq 0 ]
+
+    # Embedded PDF is byte-identical to the source fixture
+    cmp "$SCRIPT_DIR/tests/fixtures/two-page.pdf" "$dir"/*.pdf
+}
+
+@test "TEMPLATE_PAGES > PDF page count: overflow pages fall back to TEMPLATE_STYLE" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    command -v qpdf >/dev/null || skip "qpdf not available"
+    out="$BATS_TEST_TMPDIR/pdf-overflow.rmdoc"
+    run env TEMPLATE_PDF="$SCRIPT_DIR/tests/fixtures/two-page.pdf" TEMPLATE_PAGES=4 TEMPLATE_STYLE=grid \
+        JOURNAL_NAME=pdf-overflow OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    dir="$BATS_TEST_TMPDIR/pdf-overflow-unpacked"
+    mkdir -p "$dir"
+    unzip -oq "$out" -d "$dir"
+
+    # First 2 pages redir to PDF pages 0 and 1; last 2 fall back to the template
+    [ "$(jq -r '.cPages.pages[0].redir.value' "$dir"/*.content)" = "0" ]
+    [ "$(jq -r '.cPages.pages[1].redir.value' "$dir"/*.content)" = "1" ]
+    [ "$(jq -r '.cPages.pages[2].template.value' "$dir"/*.content)" = "P Grid medium" ]
+    [ "$(jq -r '.cPages.pages[3].template.value' "$dir"/*.content)" = "P Grid medium" ]
+    [ "$(jq -r '.cPages.pages[2].redir' "$dir"/*.content)" = "null" ]
+    [ "$(jq -r '.cPages.pages[0].template' "$dir"/*.content)" = "null" ]
+
+    # Only the 2 fallback (template) pages have .rm files
+    [ "$(find "$dir" -name '*.rm' | wc -l)" -eq 2 ]
+}
+
+@test "default (no PDF) path is untouched: fileType stays notebook, no sizeInBytes" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    out="$BATS_TEST_TMPDIR/no-pdf.rmdoc"
+    run env TEMPLATE_STYLE=lined TEMPLATE_PAGES=1 JOURNAL_NAME=no-pdf OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    dir="$BATS_TEST_TMPDIR/no-pdf-unpacked"
+    mkdir -p "$dir"
+    unzip -oq "$out" -d "$dir"
+    [ "$(jq -r '.fileType' "$dir"/*.content)" = "notebook" ]
+    [ "$(jq -r '.coverPageNumber' "$dir"/*.content)" = "-1" ]
+    [ "$(jq -e 'has("sizeInBytes")' "$dir"/*.content)" = "false" ]
+}
+
+# Builds a minimal PDF-backed .rmdoc bundle (fileType:"pdf", one redir page,
+# embedded two-page.pdf) to stand in for "a document already on the tablet",
+# without depending on generate-native-journal.sh itself.
+build_pdf_doc_fixture() {
+    local out="$1" work id pid
+    work="$BATS_TEST_TMPDIR/doc-fixture-src"
+    mkdir -p "$work/tmp"
+    id="11111111-1111-1111-1111-111111111111"
+    pid="22222222-2222-2222-2222-222222222222"
+    jq -n --arg id "$pid" \
+      '{cPages: {pages: [{id: $id, idx: {timestamp:"1:1", value:"ba"}, redir: {timestamp:"1:1", value:0}}],
+                 lastOpened: {timestamp:"1:1", value: $id}, uuids: [{first:"00000000-0000-0000-0000-000000000000", second:1}]},
+        fileType: "pdf", pageCount: 1, coverPageNumber: 0, orientation: "portrait"}' \
+      > "$work/tmp/$id.content"
+    jq -n --arg name "doc-fixture" \
+      '{createdTime:"0", lastModified:"0", lastOpened:"0", lastOpenedPage:-1, new:false, parent:"", pinned:false, source:"", type:"DocumentType", visibleName:$name}' \
+      > "$work/tmp/$id.metadata"
+    cp "$SCRIPT_DIR/tests/fixtures/two-page.pdf" "$work/tmp/$id.pdf"
+    ( cd "$work/tmp" && zip -r -X -q "$out" "$id.content" "$id.metadata" "$id.pdf" )
+}
+
+@test "TEMPLATE_DOC fetches an existing PDF-backed document via rmapi and reuses its PDF" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    command -v qpdf >/dev/null || skip "qpdf not available"
+
+    fixture="$BATS_TEST_TMPDIR/doc-fixture.rmdoc"
+    build_pdf_doc_fixture "$fixture"
+
+    stub_dir="$BATS_TEST_TMPDIR/stub-bin"
+    mkdir -p "$stub_dir"
+    cat > "$stub_dir/rmapi" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "get" ]; then
+  cp "$fixture" "./\$(basename "\$2").rmdoc"
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$stub_dir/rmapi"
+
+    out="$BATS_TEST_TMPDIR/via-doc.rmdoc"
+    run env PATH="$stub_dir:$PATH" TEMPLATE_DOC="/Templates/My PDF Notebook" TEMPLATE_PAGES=1 \
+        JOURNAL_NAME=via-doc OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    dir="$BATS_TEST_TMPDIR/via-doc-unpacked"
+    mkdir -p "$dir"
+    unzip -oq "$out" -d "$dir"
+    [ "$(jq -r '.fileType' "$dir"/*.content)" = "pdf" ]
+    cmp "$SCRIPT_DIR/tests/fixtures/two-page.pdf" "$dir"/*.pdf
+}
+
+@test "TEMPLATE_PDF accepts a PNG, auto-wrapping it into a 1-page PDF" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    command -v qpdf >/dev/null || skip "qpdf not available"
+    command -v img2pdf >/dev/null || skip "img2pdf not available"
+
+    out="$BATS_TEST_TMPDIR/png-test.rmdoc"
+    run env TEMPLATE_PDF="$SCRIPT_DIR/tests/fixtures/test-template.png" TEMPLATE_PAGES=1 \
+        JOURNAL_NAME=png-test OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    dir="$BATS_TEST_TMPDIR/png-test-unpacked"
+    mkdir -p "$dir"
+    unzip -oq "$out" -d "$dir"
+
+    [ "$(jq -r '.fileType' "$dir"/*.content)" = "pdf" ]
+    [ "$(jq -r '.cPages.pages[0].redir.value' "$dir"/*.content)" = "0" ]
+    [ "$(find "$dir" -name '*.rm' | wc -l)" -eq 0 ]
+    head -c5 "$dir"/*.pdf | grep -q '^%PDF-'
+}
+
+@test "TEMPLATE_PDF rejects an invalid PNG/JPG image" {
+    command -v img2pdf >/dev/null || skip "img2pdf not available"
+    bad="$BATS_TEST_TMPDIR/bad.png"
+    echo "not an image" > "$bad"
+    run env TEMPLATE_PDF="$bad" JOURNAL_NAME=badpng OUTPUT_FILE="$BATS_TEST_TMPDIR/badpng.rmdoc" "$SCRIPT"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -qi 'failed to convert TEMPLATE_PDF image'
+}
+
+@test "TEMPLATE_DOC errors clearly when the fetched document has no embedded PDF" {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+
+    # Build a plain notebook bundle (no .pdf inside) to stand in for a
+    # non-PDF-backed document already on the tablet.
+    plain="$BATS_TEST_TMPDIR/plain-notebook.rmdoc"
+    run env TEMPLATE_STYLE=lined TEMPLATE_PAGES=1 JOURNAL_NAME=plain OUTPUT_FILE="$plain" "$SCRIPT"
+    [ "$status" -eq 0 ]
+
+    stub_dir="$BATS_TEST_TMPDIR/stub-bin2"
+    mkdir -p "$stub_dir"
+    cat > "$stub_dir/rmapi" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "get" ]; then
+  cp "$plain" "./\$(basename "\$2").rmdoc"
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$stub_dir/rmapi"
+
+    run env PATH="$stub_dir:$PATH" TEMPLATE_DOC="/Templates/Plain Notebook" \
+        JOURNAL_NAME=via-doc-bad OUTPUT_FILE="$BATS_TEST_TMPDIR/via-doc-bad.rmdoc" "$SCRIPT"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -qi 'no embedded PDF'
+}
