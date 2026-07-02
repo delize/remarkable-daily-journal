@@ -271,13 +271,54 @@ setup() {
     cmp "$SCRIPT_DIR/tests/fixtures/two-page.pdf" "$real"
 }
 
-@test "TEMPLATE_PDF ignores TEMPLATE_PAGES/TEMPLATE_STYLE in default mode" {
+@test "TEMPLATE_PDF ignores TEMPLATE_STYLE in default mode" {
     out="$BATS_TEST_TMPDIR/ignored.rmdoc"
-    run env TEMPLATE_PDF="$SCRIPT_DIR/tests/fixtures/two-page.pdf" TEMPLATE_PAGES=5 TEMPLATE_STYLE=grid \
+    run env TEMPLATE_PDF="$SCRIPT_DIR/tests/fixtures/two-page.pdf" TEMPLATE_STYLE=grid \
         JOURNAL_NAME=ignored OUTPUT_FILE="$out" "$SCRIPT"
     [ "$status" -eq 0 ]
     real="${out%.*}.pdf"
     cmp "$SCRIPT_DIR/tests/fixtures/two-page.pdf" "$real"
+}
+
+@test "TEMPLATE_PDF with TEMPLATE_PAGES unset leaves the source's page count untouched" {
+    command -v qpdf >/dev/null || skip "qpdf not available"
+    out="$BATS_TEST_TMPDIR/unset-pages.rmdoc"
+    run env TEMPLATE_PDF="$SCRIPT_DIR/tests/fixtures/two-page.pdf" \
+        JOURNAL_NAME=unset-pages OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    real="${out%.*}.pdf"
+    cmp "$SCRIPT_DIR/tests/fixtures/two-page.pdf" "$real"
+}
+
+@test "TEMPLATE_PAGES explicitly <= source page count leaves it untouched (no repetition)" {
+    command -v qpdf >/dev/null || skip "qpdf not available"
+    out="$BATS_TEST_TMPDIR/le-pages.rmdoc"
+    run env TEMPLATE_PDF="$SCRIPT_DIR/tests/fixtures/two-page.pdf" TEMPLATE_PAGES=1 \
+        JOURNAL_NAME=le-pages OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    real="${out%.*}.pdf"
+    # Full 2-page source is preserved, not truncated to 1.
+    cmp "$SCRIPT_DIR/tests/fixtures/two-page.pdf" "$real"
+    [ "$(qpdf --show-npages "$real")" -eq 2 ]
+}
+
+@test "TEMPLATE_PAGES explicitly greater than source page count repeats pages via qpdf" {
+    command -v qpdf >/dev/null || skip "qpdf not available"
+    out="$BATS_TEST_TMPDIR/gt-pages.rmdoc"
+    run env TEMPLATE_PDF="$SCRIPT_DIR/tests/fixtures/two-page.pdf" TEMPLATE_PAGES=5 \
+        JOURNAL_NAME=gt-pages OUTPUT_FILE="$out" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    real="${out%.*}.pdf"
+    [ "$(qpdf --show-npages "$real")" -eq 5 ]
+    # Not byte-identical anymore — it's a rebuilt, repeated PDF.
+    ! cmp -s "$SCRIPT_DIR/tests/fixtures/two-page.pdf" "$real"
+}
+
+@test "rejects a non-numeric TEMPLATE_PAGES when a PDF source is set" {
+    run env TEMPLATE_PDF="$SCRIPT_DIR/tests/fixtures/two-page.pdf" TEMPLATE_PAGES=abc \
+        JOURNAL_NAME=bad-pages OUTPUT_FILE="$BATS_TEST_TMPDIR/bad-pages.rmdoc" "$SCRIPT"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -qi 'TEMPLATE_PAGES must be a positive integer'
 }
 
 @test "TEMPLATE_PDF accepts a PNG in default mode, auto-wrapping via img2pdf" {
@@ -408,6 +449,12 @@ EOF
     unzip -oq "$out" -d "$dir"
 
     [ "$(jq -r '.fileType' "$dir"/*.content)" = "pdf" ]
+    # Ground-truth scalar fields (pulled from a real device-synced document),
+    # set proactively for fidelity — never per-page CRDT state.
+    [ "$(jq -r '.dummyDocument' "$dir"/*.content)" = "false" ]
+    [ "$(jq -r '.margins' "$dir"/*.content)" = "180" ]
+    [ "$(jq -r '.lastOpenedPage' "$dir"/*.content)" = "0" ]
+    [ "$(jq -r '.cPages.original.value' "$dir"/*.content)" = "2" ]
     # cPages.pages stays exactly at its pristine empty default — no redir,
     # no template, no per-page CRDT entries at all.
     [ "$(jq -c '.cPages.pages' "$dir"/*.content)" = "[]" ]

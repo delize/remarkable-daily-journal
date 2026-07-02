@@ -253,9 +253,28 @@ wrapped into a 1-page PDF automatically (via `img2pdf`) before continuing.
 all. This is deliberately identical in spirit to `rmapi put somefile.pdf`,
 the same path any normal PDF import already uses safely: the tablet itself
 builds its own page structure the first time you open it. Because of this,
-`TEMPLATE_PAGES`/`TEMPLATE_STYLE` don't apply once `TEMPLATE_PDF`/`TEMPLATE_DOC`
-is set — the source PDF's own pages are what you get, and the tablet decides
-how many pages the resulting document has.
+`TEMPLATE_STYLE` doesn't apply once `TEMPLATE_PDF`/`TEMPLATE_DOC` is set — the
+source's own pages are what you get.
+
+Note: on a PDF-backed document, the tablet's own "add page" feature inserts a
+genuinely blank page (no template, no background) rather than repeating your
+custom page — PDF pages are literal embedded content, not a template
+reference the device can copy forward. This is standard reMarkable behavior
+for any PDF import, not specific to this tool.
+
+**Repeating a page across a multi-page daily note**: if you explicitly set
+`TEMPLATE_PAGES` higher than the source's own page count, the source's pages
+are repeated (cycling through them in order) at the *file level* — via
+`qpdf`, before upload — to reach that count. This is a plain PDF-page
+duplication, not device-side page invention, so it stays within the same
+proven-safe upload path. Leave `TEMPLATE_PAGES` unset (or ≤ the source's own
+page count) to upload the source completely unchanged.
+
+```yaml
+# A 1-page source, repeated to a 5-page document
+- TEMPLATE_PDF=/app/templates/cover.pdf
+- TEMPLATE_PAGES=5
+```
 
 **`TEMPLATE_PDF_NATIVE_EXPERIMENTAL=true`** (opt-in, off by default) instead
 builds a native `.rmdoc` bundle ourselves — keeping `AUTHOR_UUID` stamping and

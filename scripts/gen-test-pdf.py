@@ -18,8 +18,8 @@ def add(body):
 
 cat = add("<< /Type /Catalog /Pages 2 0 R >>")
 add("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>")
-add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
-add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
+add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> >>")
+add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> >>")
 
 out = bytearray(b"%PDF-1.4\n")
 offsets = [0]

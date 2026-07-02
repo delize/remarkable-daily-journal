@@ -88,6 +88,13 @@ TEMPLATE_HARDWARE="${TEMPLATE_HARDWARE:-rmpp}"
 TEMPLATES_JSON="${TEMPLATES_JSON:-$SCRIPT_DIR/assets/templates/${TEMPLATE_HARDWARE}.json}"
 
 TEMPLATE_STYLE="${TEMPLATE_STYLE:-lined}"
+# Captured before the default is applied: whether the caller explicitly set
+# TEMPLATE_PAGES, vs. just getting the "1" default. In the default PDF-safe
+# path, an explicit TEMPLATE_PAGES greater than the source's own page count
+# repeats the source's pages (via qpdf, at the file level — no device-side
+# CRDT trickery) to reach that count; leaving it unset never touches the
+# source PDF's own page count/order at all.
+TEMPLATE_PAGES_WAS_SET="${TEMPLATE_PAGES+x}"
 TEMPLATE_PAGES="${TEMPLATE_PAGES:-1}"
 TEMPLATE_PDF="${TEMPLATE_PDF:-}"
 TEMPLATE_DOC="${TEMPLATE_DOC:-}"
@@ -187,6 +194,37 @@ if [ -n "$PDF_PATH" ]; then
     || { echo "ERROR: resolved PDF source doesn't look like a PDF (missing %PDF- header): $PDF_PATH" >&2; exit 1; }
 fi
 
+# Repeat the source PDF's own pages (via qpdf, purely at the file level — no
+# device-side page/CRDT invention at all) to reach an explicitly-requested
+# TEMPLATE_PAGES, when it's larger than the source's natural page count.
+# Cycles through the source's pages in order (1,2,...,N,1,2,...) so a
+# multi-page source repeats as a unit, not just its last page.
+repeat_pdf_pages() {
+  local src="$1" want="$2" out="$3" actual page i args
+  command -v qpdf >/dev/null 2>&1 \
+    || { echo "ERROR: 'qpdf' not found (required to repeat TEMPLATE_PDF's pages for TEMPLATE_PAGES=$want)" >&2; exit 1; }
+  actual="$(qpdf --show-npages "$src" 2>/dev/null)" \
+    || { echo "ERROR: failed to read PDF page count: $src" >&2; exit 1; }
+  [ "$want" -gt "$actual" ] || return 0
+  args=()
+  page=1
+  for ((i = 0; i < want; i++)); do
+    args+=("$src" "$page")
+    page=$(( page % actual + 1 ))
+  done
+  qpdf --empty --pages "${args[@]}" -- "$out" \
+    || { echo "ERROR: qpdf failed to repeat $src (has $actual page(s)) to $want pages" >&2; exit 1; }
+  PDF_PATH="$out"
+}
+
+if [ -n "$PDF_PATH" ] && [ -n "$TEMPLATE_PAGES_WAS_SET" ]; then
+  if ! [[ "$TEMPLATE_PAGES" =~ ^[0-9]+$ ]] || [ "$TEMPLATE_PAGES" -lt 1 ]; then
+    echo "ERROR: TEMPLATE_PAGES must be a positive integer: $TEMPLATE_PAGES" >&2
+    exit 1
+  fi
+  repeat_pdf_pages "$PDF_PATH" "$TEMPLATE_PAGES" "$WORK/repeated.pdf"
+fi
+
 ###############################################################################
 # Default, proven-safe path: TEMPLATE_PDF/TEMPLATE_DOC without the
 # experimental flag just writes out a plain .pdf file. No custom bundle, no
@@ -261,13 +299,21 @@ idx_key() {
 }
 
 if [ -n "$PDF_PATH" ]; then
-  # Experimental native-PDF-bundle variant: NO page loop, NO cPages
-  # population at all. cPages stays at assets/base.content.json's pristine
-  # empty default (pages: [], lastOpened: {timestamp:"0:0",value:""}) —
-  # exactly the "never opened yet" shape a real device would start from,
+  # Experimental native-PDF-bundle variant: NO page loop, NO cPages.pages
+  # population at all — that array stays at assets/base.content.json's
+  # pristine empty default (pages: [], lastOpened: {timestamp:"0:0",value:""})
+  # — exactly the "never opened yet" shape a real device would start from,
   # matching what rmapi's own raw-PDF upload leaves for the tablet to build
   # itself. We only touch scalar document properties, never per-page sync
   # state.
+  #
+  # The extra scalar fields below (dummyDocument, margins, lastOpenedPage,
+  # cPages.original) come from real ground truth: a plain-PDF-passthrough
+  # document (this tool's already-verified-safe default path) uploaded to a
+  # real account, opened on a real tablet, then fetched back via `rmapi get`
+  # to inspect what the device itself actually produced. None of these are
+  # per-page CRDT state — just scalars the device set once it owned the
+  # document, which we set proactively here for fidelity.
   PDF_SIZE_BYTES="$(wc -c < "$PDF_PATH" | tr -d ' ')"
   PDF_PAGE_COUNT=1
   if command -v qpdf >/dev/null 2>&1; then
@@ -276,9 +322,13 @@ if [ -n "$PDF_PATH" ]; then
 
   jq --arg uuid "$AUTHOR_UUID" --arg size "$PDF_SIZE_BYTES" --argjson n "$PDF_PAGE_COUNT" \
     '.cPages.uuids = [ { first: $uuid, second: 1 } ]
+     | .cPages.original = { timestamp: "1:1", value: $n }
      | .fileType = "pdf"
      | .pageCount = $n
-     | .sizeInBytes = $size' \
+     | .sizeInBytes = $size
+     | .dummyDocument = false
+     | .margins = 180
+     | .lastOpenedPage = 0' \
     "$BASE_CONTENT" > "$WORK/$DOCID.content"
 
   jq -n --arg name "$JOURNAL_NAME" --arg ts "$CREATED_TIME_MS" \
