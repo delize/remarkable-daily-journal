@@ -613,3 +613,15 @@ Feel free to open issues or PRs for:
 - Weekly/monthly notebook options
 - Per-page mixed templates
 - Integration with other note systems
+- Vectorizing a PNG/PDF into a genuine native device template (reMarkable's
+  own `.template` format is a purely vector/programmatic DSL — `group`,
+  `text`, and `path` items only, no raster image embedding at all, confirmed
+  by inspecting every Methods-imported template on a real device). A
+  raster-to-vector tracing step (e.g. potrace-style line tracing) could turn
+  a simple line-art PNG/PDF into this schema, making it a real, repeatable,
+  on-device template — unlike the PDF-background approach above, which can
+  never get "add page" template inheritance. Won't work for photos/complex
+  graphics, only line-art-style content. Requires the SSH-based template
+  registration mechanism (`/home/root/.local/share/remarkable/xochitl/`,
+  paired `.content`/`.metadata`/`.template`/`.thumbnails` files) — a
+  genuinely new capability, not yet built.
