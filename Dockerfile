@@ -18,7 +18,7 @@
 #     does not work. Fixed by ddvk/rmapi #77.
 # v0.0.35 also carries the `-json` output flag that cleanup-old-journals.sh
 # needs to read the whole folder's metadata in a single call.
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 # Pinned by commit SHA rather than tag name so the checkout is immutable even
 # if a tag is ever moved. This SHA is the v0.0.35 tag (2026-08-19). Bump
 # deliberately (e.g. when ddvk publishes a fix or chases a cloud-API change)
