@@ -407,6 +407,56 @@ run_cleanup() {
     ! grep -qx 'ls /' "$RMAPI_CALLS"
 }
 
+@test "the listing is read with the lowercase modifiedClient key" {
+    # `rmapi -json ls` marshals NodeJSON (json tags -> lowercase). `rmapi stat`
+    # marshals the bare Go struct (capitalised). Carrying the old stat-era
+    # `.ModifiedClient` path over to the listing would yield an empty MC for
+    # every document, and the fail-closed gate would then skip all of them —
+    # cleanup silently becomes a permanent no-op that looks healthy in the log.
+    grep -q 'modifiedClient' "$SCRIPT"
+    setup_stub
+    STUB_GET_FILE="$(make_empty_bundle)"; export STUB_GET_FILE
+    # Exactly the shape the cloud returns: lowercase keys only.
+    cat > "$BATS_TEST_TMPDIR/lower.json" <<JSON
+[{"id":"x","name":"2020-01-15","type":"DocumentType","modifiedClient":"$(iso_hours_ago 2)"}]
+JSON
+    export STUB_LISTING_JSON="$BATS_TEST_TMPDIR/lower.json"
+    run_cleanup
+    [ "$status" -eq 0 ]
+    ! echo "$output" | grep -q "no ModifiedClient"
+    grep -q "Daily Journal/2020-01-15" "$RMAPI_REMOVED"
+}
+
+@test "a capitalised ModifiedClient still parses, so a shape change degrades safely" {
+    setup_stub
+    STUB_GET_FILE="$(make_empty_bundle)"; export STUB_GET_FILE
+    cat > "$BATS_TEST_TMPDIR/upper.json" <<JSON
+[{"ID":"x","Name":"2020-01-15","Type":"DocumentType","ModifiedClient":"$(iso_hours_ago 2)"}]
+JSON
+    export STUB_LISTING_JSON="$BATS_TEST_TMPDIR/upper.json"
+    run_cleanup
+    [ "$status" -eq 0 ]
+    ! echo "$output" | grep -q "no ModifiedClient"
+    grep -q "Daily Journal/2020-01-15" "$RMAPI_REMOVED"
+}
+
+@test "a subfolder is not treated as a journal" {
+    # The old parser keyed off the [f] prefix, so folders excluded themselves.
+    # The JSON path needs an explicit type filter or a CollectionType entry
+    # whose name happens to carry a date becomes a deletion candidate.
+    setup_stub
+    STUB_GET_FILE="$(make_empty_bundle)"; export STUB_GET_FILE
+    cat > "$BATS_TEST_TMPDIR/mixed.json" <<JSON
+[{"id":"a","name":"Archive 2020-01-15","type":"CollectionType","modifiedClient":"$(iso_hours_ago 2)"},
+ {"id":"b","name":"2020-01-16","type":"DocumentType","modifiedClient":"$(iso_hours_ago 2)"}]
+JSON
+    export STUB_LISTING_JSON="$BATS_TEST_TMPDIR/mixed.json"
+    run_cleanup
+    [ "$status" -eq 0 ]
+    ! grep -q "Archive" "$RMAPI_REMOVED"
+    grep -q "Daily Journal/2020-01-16" "$RMAPI_REMOVED"
+}
+
 @test "dry run never calls rmapi rm" {
     setup_stub
     STUB_GET_FILE="$(make_empty_bundle)"; export STUB_GET_FILE

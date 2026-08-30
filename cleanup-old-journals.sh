@@ -206,12 +206,30 @@ if ! echo "$LISTING_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
     log "       read ModifiedClient for the whole folder in one call. Rebuild the"
     log "       image so rmapi is new enough to support -json."
     log "       stderr: $LS_ERR"
+    # If -json ever goes away, the other single-handshake option is to pipe N
+    # stat commands into one interactive rmapi session (`rmapi -ni` with the
+    # commands on stdin). Measured at 59 stats, 1 handshake, 0 429s. Same win,
+    # more output parsing, so it is the fallback rather than the default.
     exit 0
 fi
 
-# name<TAB>modifiedClient, documents only (folders and templates dropped).
+# name<TAB>modifiedClient, documents only.
+#
+# The type filter is load-bearing: the old parser keyed off the `[f]` prefix in
+# `rmapi ls` output, so folders excluded themselves. Here a subfolder arrives as
+# a CollectionType entry and would otherwise be treated as a journal.
+#
+# The field is lowercase `modifiedClient` — `rmapi -json ls` marshals a NodeJSON
+# with explicit json tags, while `rmapi stat` marshals the bare Go struct and so
+# emits capitalised `ModifiedClient`. The capitalised spelling is accepted as a
+# fallback only so a future shape change degrades into "keep working" rather
+# than "every document yields an empty MC, the fail-closed gate skips them all,
+# and cleanup silently becomes a permanent no-op".
 echo "$LISTING_JSON" \
-    | jq -r '.[] | select(.type == "DocumentType") | [.name, (.modifiedClient // "")] | @tsv' \
+    | jq -r '.[]
+             | select((.type // .Type) == "DocumentType")
+             | [(.name // .Name), (.modifiedClient // .ModifiedClient // "")]
+             | @tsv' \
     > "$TEMP_DIR/listing.tsv"
 
 if [ ! -s "$TEMP_DIR/listing.tsv" ]; then
@@ -395,7 +413,8 @@ while IFS=$'\t' read -r DOC_NAME MC; do
             cache_forget "$DOC_NAME"
             DELETED=$((DELETED + 1))
         else
-            log "  ERROR: Failed to remove (exit=$RM_EXIT): $RM_OUTPUT"
+            log "  ERROR: Failed to remove (exit=$RM_EXIT)"
+            rmapi_explain_write_failure "$RM_OUTPUT" "delete"
             if rmapi_is_rate_limited "$RM_OUTPUT"; then
                 rm -rf "$WORK_DIR"
                 abort_rate_limited "rmapi rm \"$DOC_PATH\""
