@@ -89,10 +89,14 @@ services:
       # whose pages are all blank gets cleaned up. Raise if light notes vanish.
       - EMPTY_RM_MAX_BYTES=1000
 
-      # If the cloud's sizeInBytes is above this, skip the download entirely
-      # and treat the journal as written-on. Empty bundles are ~6KB; any real
-      # ink pushes them past ~50KB.
-      - EMPTY_BUNDLE_MAX_BYTES=50000
+      # Most journals to download in a single cleanup pass. Every rmapi call
+      # re-exchanges the device token, and reMarkable's auth endpoint returns
+      # HTTP 429 after a burst, so cleanup is capped and spaced out to stay
+      # well inside that budget.
+      - CLEANUP_MAX_DOCS=5
+
+      # Seconds to wait between rmapi calls in the per-document loop
+      - CLEANUP_API_DELAY_SECONDS=2
 
       # Set to "true" to log what cleanup WOULD delete without removing anything.
       # Useful for a first run to confirm it only targets empty journals.

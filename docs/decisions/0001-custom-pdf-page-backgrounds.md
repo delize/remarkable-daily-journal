@@ -119,6 +119,10 @@ this repo's working session; see `generate-native-journal.sh`,
   PDF-backed journal as "written-on" purely because the embedded PDF pushes
   bundle size over the threshold — a pre-existing heuristic limitation with a
   new trigger, not addressed by this decision.
+  (Later amendment: this heuristic was removed. It read `sizeInBytes` from
+  `rmapi stat`, a field rmapi's document model never returns, so it could
+  never fire. The per-document `rmapi stat` it depended on is gone too, since
+  it rate-limited the account.)
 - `methods.remarkable.com` and on-device SSH template registration remain
   explicitly out of scope; should either resurface as a request, this ADR
   documents why they were rejected rather than re-investigating from scratch.

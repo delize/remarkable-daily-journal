@@ -134,9 +134,12 @@ environment:
   # A page .rm at/below this size (bytes) counts as unwritten
   - EMPTY_RM_MAX_BYTES=1000
 
-  # Skip the download if the cloud bundle is already this big — anything past
-  # ~50KB has strokes.
-  - EMPTY_BUNDLE_MAX_BYTES=50000
+  # Most journals to download in a single pass. Caps how much of the
+  # reMarkable rate-limit budget cleanup can spend.
+  - CLEANUP_MAX_DOCS=5
+
+  # Seconds between rmapi calls in the per-document loop
+  - CLEANUP_API_DELAY_SECONDS=2
 
   # Log what cleanup would delete without removing anything
   - CLEANUP_DRY_RUN=false
@@ -342,19 +345,35 @@ left alone forever:
 3. **Skip any journal older than `CLEANUP_KEEP_HOURS`** (using the cloud's
    `ModifiedClient` time). Once a journal is past the window it is considered
    settled — never downloaded, never deleted.
-4. For in-window journals, try cheap short-circuits before downloading:
-   - **Cache**: a persistent `{name → ModifiedClient}` cache (at
-     `CLEANUP_CACHE`, defaulting to `/app/.config/rmapi/cleanup-cache.tsv`)
-     records every journal we've already verified as written-on. If the cache
-     hit's `ModifiedClient` matches today's, skip the download.
-   - **Cloud size**: if `rmapi stat`'s `sizeInBytes` is above
-     `EMPTY_BUNDLE_MAX_BYTES` (default 50000), treat as written-on and skip.
-5. Only journals that survived the short-circuits get downloaded. Check the
-   largest page `.rm`:
+4. For in-window journals, check the persistent `{name → ModifiedClient}`
+   cache (at `CLEANUP_CACHE`, defaulting to
+   `/app/.config/rmapi/cleanup-cache.tsv`) first. It records every journal
+   already verified as written-on. If the cached `ModifiedClient` matches
+   today's, skip the download.
+5. Only journals that survived the short-circuits get downloaded, at most
+   `CLEANUP_MAX_DOCS` per pass. Check the largest page `.rm`:
    - an unwritten page is just the empty scene skeleton (~409 bytes)
    - writing on a page makes its `.rm` grow (typically 2600+ bytes)
 6. If every page is at/below `EMPTY_RM_MAX_BYTES`, the journal is empty → deleted;
    otherwise it has writing → cached and kept.
+
+Two properties this pass is built around:
+
+**It stays inside the rate-limit budget.** Every `rmapi` invocation is a fresh
+process that re-exchanges the stored device token for a user token, and
+reMarkable's auth endpoint starts returning HTTP 429 after a handful of those in
+quick succession. So the whole folder's metadata comes from a single
+`rmapi -json ls` call rather than an `rmapi stat` per document, downloads are
+capped and spaced out, and any 429 aborts the pass immediately instead of
+grinding through the rest of the folder. Journal creation also runs *before*
+cleanup, so this optional maintenance can never spend the budget the primary
+function needs.
+
+**It fails closed.** Anything the pass cannot positively prove is both
+in-window and empty is kept. A missing `ModifiedClient`, an unparseable one, or
+a failed download all mean "skip", never "inspect" or "delete". A refused
+download produces no `.rm` layers, and reading that as "empty" would delete a
+settled journal.
 
 To preview without deleting, set `CLEANUP_DRY_RUN=true` for one run and watch the
 log. To disable cleanup entirely:
