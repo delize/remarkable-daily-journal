@@ -99,6 +99,42 @@ setup() {
     grep -q "sleep" "$SCRIPT"
 }
 
-@test "script verifies rmapi authentication in schedule mode" {
-    grep -q 'rmapi ls.*>' "$SCRIPT"
+@test "script verifies rmapi health through the shared helper" {
+    grep -q 'rmapi-health.sh' "$SCRIPT"
+    grep -q 'rmapi_check_health' "$SCRIPT"
+}
+
+@test "cycle creates the journal BEFORE running cleanup" {
+    # Cleanup is optional maintenance. When it ran first it could burn the
+    # reMarkable rate-limit budget and take journal creation down with it.
+    local create_line cleanup_line
+    create_line=$(grep -n '/app/create-daily-note.sh' "$SCRIPT" | head -1 | cut -d: -f1)
+    cleanup_line=$(grep -n '/app/cleanup-old-journals.sh' "$SCRIPT" | head -1 | cut -d: -f1)
+    [ -n "$create_line" ]
+    [ -n "$cleanup_line" ]
+    [ "$create_line" -lt "$cleanup_line" ]
+}
+
+@test "no cleanup invocation is reachable before its journal creation" {
+    # Both `run` mode and cycle() must have the same ordering: in file order,
+    # every cleanup call is immediately preceded by a create call.
+    run bash -c "grep -oE '/app/(create-daily-note|cleanup-old-journals)\\.sh' '$SCRIPT' | sed 's|/app/||; s|\\.sh||'"
+    [ "$status" -eq 0 ]
+    prev=""
+    while IFS= read -r name; do
+        if [ "$name" = "cleanup-old-journals" ]; then
+            [ "$prev" = "create-daily-note" ]
+        fi
+        prev="$name"
+    done <<< "$output"
+}
+
+@test "a rate-limited cycle is not reported as a token problem" {
+    grep -q 'rate-limited' "$SCRIPT"
+    grep -q 'NOT token expiry' "$SCRIPT"
+}
+
+@test "children skip a redundant health check via RMAPI_HEALTH_VERIFIED" {
+    grep -q 'export RMAPI_HEALTH_VERIFIED=true' "$SCRIPT"
+    grep -q 'unset RMAPI_HEALTH_VERIFIED' "$SCRIPT"
 }
