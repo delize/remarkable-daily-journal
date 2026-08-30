@@ -66,6 +66,7 @@ run_shellcheck() {
         "$PROJECT_DIR/create-daily-note.sh"
         "$PROJECT_DIR/cleanup-old-journals.sh"
         "$PROJECT_DIR/entrypoint.sh"
+        "$PROJECT_DIR/rmapi-health.sh"
     )
 
     local failed=0
@@ -110,6 +111,7 @@ run_syntax_check() {
         "$PROJECT_DIR/create-daily-note.sh"
         "$PROJECT_DIR/cleanup-old-journals.sh"
         "$PROJECT_DIR/entrypoint.sh"
+        "$PROJECT_DIR/rmapi-health.sh"
     )
 
     local failed=0

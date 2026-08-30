@@ -68,6 +68,7 @@ WORKDIR /app
 COPY create-daily-note.sh /app/
 COPY generate-native-journal.sh /app/
 COPY cleanup-old-journals.sh /app/
+COPY rmapi-health.sh /app/
 COPY github-notify.sh /app/
 COPY entrypoint.sh /app/
 COPY assets/ /app/assets/
