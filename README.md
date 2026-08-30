@@ -134,9 +134,12 @@ environment:
   # A page .rm at/below this size (bytes) counts as unwritten
   - EMPTY_RM_MAX_BYTES=1000
 
-  # Skip the download if the cloud bundle is already this big — anything past
-  # ~50KB has strokes.
-  - EMPTY_BUNDLE_MAX_BYTES=50000
+  # Most journals to download in a single pass. Caps how much of the
+  # reMarkable rate-limit budget cleanup can spend.
+  - CLEANUP_MAX_DOCS=5
+
+  # Seconds between rmapi calls in the per-document loop
+  - CLEANUP_API_DELAY_SECONDS=2
 
   # Log what cleanup would delete without removing anything
   - CLEANUP_DRY_RUN=false
@@ -342,19 +345,35 @@ left alone forever:
 3. **Skip any journal older than `CLEANUP_KEEP_HOURS`** (using the cloud's
    `ModifiedClient` time). Once a journal is past the window it is considered
    settled — never downloaded, never deleted.
-4. For in-window journals, try cheap short-circuits before downloading:
-   - **Cache**: a persistent `{name → ModifiedClient}` cache (at
-     `CLEANUP_CACHE`, defaulting to `/app/.config/rmapi/cleanup-cache.tsv`)
-     records every journal we've already verified as written-on. If the cache
-     hit's `ModifiedClient` matches today's, skip the download.
-   - **Cloud size**: if `rmapi stat`'s `sizeInBytes` is above
-     `EMPTY_BUNDLE_MAX_BYTES` (default 50000), treat as written-on and skip.
-5. Only journals that survived the short-circuits get downloaded. Check the
-   largest page `.rm`:
+4. For in-window journals, check the persistent `{name → ModifiedClient}`
+   cache (at `CLEANUP_CACHE`, defaulting to
+   `/app/.config/rmapi/cleanup-cache.tsv`) first. It records every journal
+   already verified as written-on. If the cached `ModifiedClient` matches
+   today's, skip the download.
+5. Only journals that survived the short-circuits get downloaded, at most
+   `CLEANUP_MAX_DOCS` per pass. Check the largest page `.rm`:
    - an unwritten page is just the empty scene skeleton (~409 bytes)
    - writing on a page makes its `.rm` grow (typically 2600+ bytes)
 6. If every page is at/below `EMPTY_RM_MAX_BYTES`, the journal is empty → deleted;
    otherwise it has writing → cached and kept.
+
+Two properties this pass is built around:
+
+**It stays inside the rate-limit budget.** Every `rmapi` invocation is a fresh
+process that re-exchanges the stored device token for a user token, and
+reMarkable's auth endpoint starts returning HTTP 429 after a handful of those in
+quick succession. So the whole folder's metadata comes from a single
+`rmapi -json ls` call rather than an `rmapi stat` per document, downloads are
+capped and spaced out, and any 429 aborts the pass immediately instead of
+grinding through the rest of the folder. Journal creation also runs *before*
+cleanup, so this optional maintenance can never spend the budget the primary
+function needs.
+
+**It fails closed.** Anything the pass cannot positively prove is both
+in-window and empty is kept. A missing `ModifiedClient`, an unparseable one, or
+a failed download all mean "skip", never "inspect" or "delete". A refused
+download produces no `.rm` layers, and reading that as "empty" would delete a
+settled journal.
 
 To preview without deleting, set `CLEANUP_DRY_RUN=true` for one run and watch the
 log. To disable cleanup entirely:
@@ -484,6 +503,33 @@ The **folder** is set separately with `REMARKABLE_FOLDER` (default `/Daily Journ
 Keep the date first to sort chronologically, and keep an ISO date (`%Y-%m-%d`)
 somewhere in the name — the cleanup job finds journals by matching `YYYY-MM-DD`.
 
+## Backfilling Missed Days
+
+If the container was down for a stretch, `create-daily-note.sh` takes a
+positional date and stamps the notebook's created time at noon UTC of that day,
+so the device's "Created" date matches the name:
+
+```bash
+docker exec remarkable-daily-journal /app/create-daily-note.sh 2026-08-19
+```
+
+For a range, use the helper rather than a shell loop:
+
+```bash
+docker exec remarkable-daily-journal \
+    /app/scripts/backfill-journals.sh 2026-08-19 2026-08-29
+```
+
+A loop would spend two rmapi calls per day, and every rmapi call is a fresh
+process that re-exchanges the device token. Eleven days back to back is 22
+token exchanges in a few seconds, which is enough to get the account
+rate-limited (HTTP 429). The helper runs one health check for the whole range,
+spaces the days by `BACKFILL_DELAY_SECONDS` (default 20), and stops on the
+first 429 instead of making it worse. Days that already have a notebook are
+skipped, so re-running a partially-completed range is safe.
+
+Preview first with `BACKFILL_DRY_RUN=true`.
+
 ## Troubleshooting
 
 ### "rmapi not authenticated"
@@ -547,6 +593,7 @@ rmapi ls "/Daily Journal"
 │   └── templates/
 │       └── rmpp.md                 # Human-readable template reference (generated)
 ├── scripts/
+│   ├── backfill-journals.sh        # Creates journals for a past date range
 │   ├── generate-template-docs.sh   # Render docs/templates/<hw>.md from the JSON
 │   └── update-templates.sh         # Refresh a hardware's list from latest firmware
 ├── tests/                          # Bats tests (one per script) + run-tests.sh
@@ -555,6 +602,7 @@ rmapi ls "/Daily Journal"
 ├── create-daily-note.sh            # Builds + uploads the daily journal
 ├── generate-native-journal.sh      # Builds the native .rmdoc bundle
 ├── cleanup-old-journals.sh         # Removes stale, unwritten journals
+├── rmapi-health.sh                 # Shared rmapi failure classification
 ├── entrypoint.sh                   # Container entrypoint
 └── README.md                       # This file
 ```

@@ -51,48 +51,27 @@ check_config_writable() {
     return 0
 }
 
-# Check if authenticated (with better error detection)
+# Health classification lives in rmapi-health.sh so entrypoint.sh,
+# create-daily-note.sh and cleanup-old-journals.sh all agree on what a failure
+# means. Codes: 0 healthy, 1 unauthenticated, 2 killed (OOM), 3 cloud/API
+# error, 4 rate limited (HTTP 429).
+# shellcheck source=rmapi-health.sh
+ENTRYPOINT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$ENTRYPOINT_DIR/rmapi-health.sh"
+
+# Wrapper that keeps the historical name and adds the explanatory logging.
 check_auth() {
-    local output
-    local exit_code
-
-    # Run rmapi and capture both output and exit code
-    output=$(rmapi ls / 2>&1) && exit_code=0 || exit_code=$?
-    LAST_RMAPI_OUTPUT="$output"  # exposed for issue reporting
-
-    if [ $exit_code -eq 0 ]; then
-        return 0  # Authenticated
-    elif [ $exit_code -eq 137 ] || [ $exit_code -eq 139 ]; then
-        # 137 = SIGKILL (OOM), 139 = SIGSEGV
-        log "ERROR: rmapi was killed (exit code $exit_code)"
-        log "This usually means the container has insufficient memory."
-        log "Increase the memory limit to at least 768MB:"
-        log ""
-        log "  Docker Compose: mem_limit: 768m"
-        log "  Docker run: --memory=768m"
-        log ""
-        return 2  # Killed
-    elif echo "$output" | grep -qi "failed to mirror\|failed to build documents tree\|request failed with status [45][0-9][0-9]"; then
-        # The reMarkable cloud rejected the request (e.g. HTTP 400 on the sync
-        # mirror/root endpoint). Auth succeeded; this is an API/sync mismatch,
-        # NOT a token-expiry problem. Treated separately so we don't mislabel it.
-        log "ERROR: reMarkable cloud API error (this is NOT a token-expiry problem)"
-        log "Output: $output"
-        return 3  # Cloud/API error
-    elif echo "$output" | grep -qi "unauthorized\|not authenticated\|auth"; then
-        return 1  # Not authenticated
-    else
-        log "ERROR: rmapi failed with exit code $exit_code"
-        log "Output: $output"
-        return 1
-    fi
+    local rc=0
+    rmapi_check_health || rc=$?
+    [ "$rc" -eq 0 ] || rmapi_explain_health "$rc"
+    return "$rc"
 }
 
 # Export environment variables for cron
 export_env() {
     # Export all REMARKABLE_* and common vars (incl. GitHub reporting) so the
     # scheduler loop subshell sees them after `source /app/.env`.
-    env | grep -E '^(REMARKABLE_|DATE_FORMAT|JOURNAL_|TEMPLATE_|CLEANUP_|EMPTY_RM_MAX_BYTES|SIZE_THRESHOLD|TZ|HOME|PATH|GITHUB_|GH_TOKEN)' > /app/.env 2>/dev/null || true
+    env | grep -E '^(REMARKABLE_|DATE_FORMAT|JOURNAL_|TEMPLATE_|CLEANUP_|EMPTY_RM_MAX_BYTES|SIZE_THRESHOLD|RMAPI_RATE_LIMIT_|TZ|HOME|PATH|GITHUB_|GH_TOKEN)' > /app/.env 2>/dev/null || true
 }
 
 # Fire a health notification (no-op unless github-notify.sh is configured).
@@ -112,11 +91,20 @@ notify_body() {
 # Returns: 0 = healthy (journal ran), 2 = OOM, 1 = unhealthy.
 cycle() {
     local rc=0
+    # Re-verify each cycle rather than trusting a flag set hours ago.
+    unset RMAPI_HEALTH_VERIFIED
     check_auth || rc=$?
     case "$rc" in
         0)
             log "✓ rmapi authentication verified"
-            /app/cleanup-old-journals.sh || log "Cleanup completed (or skipped)"
+            # The child scripts skip their own health check on the strength of
+            # this one, so a cycle costs one token exchange instead of three.
+            export RMAPI_HEALTH_VERIFIED=true
+
+            # Create FIRST, clean up after. Cleanup is optional maintenance and
+            # must never be able to spend the reMarkable rate-limit budget that
+            # journal creation needs: a cleanup pass that 429s used to take the
+            # creation that followed it down with it.
             if /app/create-daily-note.sh; then
                 notify ok
             else
@@ -124,6 +112,8 @@ cycle() {
                 notify failing error \
                     "$(notify_body 'Daily journal creation failed even though the rmapi auth/sync check passed. Inspect container logs.')"
             fi
+            /app/cleanup-old-journals.sh || log "Cleanup completed (or skipped)"
+            unset RMAPI_HEALTH_VERIFIED
             return 0
             ;;
         2)
@@ -135,6 +125,13 @@ cycle() {
             log "If this persists, rebuild so rmapi is built from a current commit."
             notify failing api \
                 "$(notify_body 'reMarkable cloud API error (HTTP 4xx/5xx or "failed to mirror"). The rmapi sync check failed, so the daily journal cannot run. A 400 here is an API mismatch, not token expiry — rebuild rmapi from a current commit.')"
+            return 1
+            ;;
+        4)
+            log "WARNING: reMarkable rate-limited us (HTTP 429) even after backing off."
+            log "Nothing ran this cycle. The limit clears on its own; the next run should succeed."
+            notify failing api \
+                "$(notify_body 'reMarkable returned HTTP 429 (rate limited) on the token exchange, and it was still limiting us after the backoff retries. No journal was created this cycle. This is NOT token expiry — do not re-auth. It clears on its own.')"
             return 1
             ;;
         *)
@@ -169,10 +166,19 @@ case "${1:-run}" in
         ;;
 
     run)
-        # One-shot mode: cleanup old journal and create today's note
+        # One-shot mode: create today's note, then clean up.
+        # Creation runs first so the optional cleanup pass can never spend the
+        # reMarkable rate-limit budget that creation needs.
         log "Running one-shot daily journal creation..."
-        /app/cleanup-old-journals.sh || log "Cleanup step completed (or skipped)"
+        run_rc=0
+        check_auth || run_rc=$?
+        if [ "$run_rc" -ne 0 ]; then
+            log "ERROR: rmapi health check failed (code $run_rc), not running"
+            exit 1
+        fi
+        export RMAPI_HEALTH_VERIFIED=true
         /app/create-daily-note.sh
+        /app/cleanup-old-journals.sh || log "Cleanup step completed (or skipped)"
         ;;
 
     schedule)
@@ -334,6 +340,9 @@ case "${1:-run}" in
         echo "Cleanup settings:"
         echo "  CLEANUP_ENABLED    - Enable cleanup of unused journals (default: true)"
         echo "  CLEANUP_KEEP_HOURS - Keep journals modified within this many hours (default: 48)"
+        echo "  CLEANUP_MAX_DOCS   - Most journals to download in one pass (default: 5)"
+        echo "  CLEANUP_API_DELAY_SECONDS"
+        echo "                     - Seconds between rmapi calls in the cleanup loop (default: 2)"
         echo "  EMPTY_RM_MAX_BYTES - Page .rm at/below this size counts as empty (default: 1000)"
         echo "  SIZE_THRESHOLD     - Fallback size threshold in bytes (default: 25000)"
         echo "  CLEANUP_DRY_RUN    - Log deletions without removing anything (default: false)"

@@ -45,8 +45,29 @@ setup() {
     grep -q 'DRY_RUN.*true' "$SCRIPT"
 }
 
-@test "script checks rmapi authentication" {
-    grep -q "rmapi ls" "$SCRIPT"
+@test "script checks rmapi health through the shared helper" {
+    grep -q 'rmapi-health.sh' "$SCRIPT"
+    grep -q 'rmapi_require_health' "$SCRIPT"
+}
+
+@test "script does not label every rmapi failure as not-authenticated" {
+    # `if ! rmapi ls / ...; then log "ERROR: rmapi not authenticated"` turned a
+    # cloud 4xx or a 429 into a re-auth wild goose chase.
+    ! grep -q 'rmapi not authenticated' "$SCRIPT"
+    ! grep -qE '^if ! rmapi ls / ' "$SCRIPT"
+}
+
+@test "auth instructions name a pullable image" {
+    # A bare `remarkable-daily-journal` is not a real image reference and fails
+    # with "pull access denied".
+    ! grep -qE 'docker run .*[^/]remarkable-daily-journal auth' "$SCRIPT" \
+        "$(dirname "$SCRIPT")/rmapi-health.sh"
+    grep -q 'ghcr.io/delize/remarkable-daily-journal:latest auth' \
+        "$(dirname "$SCRIPT")/rmapi-health.sh"
+}
+
+@test "script bails out rather than uploading when rate limited" {
+    grep -q 'rmapi_is_rate_limited' "$SCRIPT"
 }
 
 @test "script creates folder on reMarkable" {
@@ -121,4 +142,87 @@ setup() {
     # Script doesn't run the generator in DRY_RUN, but the date parsing has
     # to succeed without error and the log line must echo the backfill name.
     echo "$output" | grep -q 'Creating daily journal: 2026-01-15'
+}
+
+# ---------------------------------------------------------------------------
+# Behavioural tests with a stub rmapi on PATH.
+# ---------------------------------------------------------------------------
+
+setup_upload_stub() {
+    command -v zip >/dev/null || skip "zip not available"
+    command -v jq >/dev/null || skip "jq not available"
+    STUB_DIR="$BATS_TEST_TMPDIR/bin"
+    mkdir -p "$STUB_DIR"
+    export RMAPI_CALLS="$BATS_TEST_TMPDIR/calls.log"
+    : > "$RMAPI_CALLS"
+    cat > "$STUB_DIR/rmapi" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$RMAPI_CALLS"
+case "$1" in
+    ls)
+        if [ "$2" = "/" ] || [ -z "$2" ]; then
+            [ -n "${STUB_HEALTH_FAIL:-}" ] && { echo "$STUB_HEALTH_FAIL" >&2; exit 1; }
+            exit 0
+        fi
+        [ -n "${STUB_LS_FAIL:-}" ] && { echo "$STUB_LS_FAIL" >&2; exit 1; }
+        printf '%s' "${STUB_FOLDER_LISTING:-}"
+        exit 0
+        ;;
+esac
+exit 0
+STUB
+    chmod +x "$STUB_DIR/rmapi"
+    export RMAPI_RATE_LIMIT_RETRIES=0
+    unset RMAPI_HEALTH_VERIFIED
+}
+
+@test "a 429 on the health check is not reported as an auth problem, and nothing uploads" {
+    setup_upload_stub
+    STUB_HEALTH_FAIL="failed to create user token from device token request failed with status 429"
+    export STUB_HEALTH_FAIL
+    PATH="$STUB_DIR:$PATH" run "$SCRIPT"
+    [ "$status" -eq 1 ]
+    echo "$output" | grep -qi "rate-limited"
+    echo "$output" | grep -qi "NOT a token-expiry problem"
+    ! grep -q '^put' "$RMAPI_CALLS"
+}
+
+@test "an unauthenticated rmapi prints a pullable auth command" {
+    setup_upload_stub
+    STUB_HEALTH_FAIL="unauthorized"
+    export STUB_HEALTH_FAIL
+    PATH="$STUB_DIR:$PATH" run "$SCRIPT"
+    [ "$status" -eq 1 ]
+    echo "$output" | grep -q "ghcr.io/delize/remarkable-daily-journal:latest auth"
+    ! grep -q '^put' "$RMAPI_CALLS"
+}
+
+@test "an existing notebook is detected from the single folder listing" {
+    setup_upload_stub
+    STUB_FOLDER_LISTING="$(printf '[f]\t%s\n' "$(date +%Y-%m-%d)")"
+    export STUB_FOLDER_LISTING
+    PATH="$STUB_DIR:$PATH" run "$SCRIPT"
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "already exists"
+    ! grep -q '^put' "$RMAPI_CALLS"
+    # No unconditional mkdir when the folder already lists fine.
+    ! grep -q '^mkdir' "$RMAPI_CALLS"
+}
+
+@test "a healthy run uploads exactly once" {
+    setup_upload_stub
+    STUB_FOLDER_LISTING=""
+    export STUB_FOLDER_LISTING
+    PATH="$STUB_DIR:$PATH" run "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^put' "$RMAPI_CALLS")" -eq 1 ]
+}
+
+@test "a health check already done by the entrypoint is not repeated" {
+    setup_upload_stub
+    STUB_FOLDER_LISTING=""
+    export STUB_FOLDER_LISTING
+    PATH="$STUB_DIR:$PATH" RMAPI_HEALTH_VERIFIED=true run "$SCRIPT"
+    [ "$status" -eq 0 ]
+    ! grep -qx 'ls /' "$RMAPI_CALLS"
 }
