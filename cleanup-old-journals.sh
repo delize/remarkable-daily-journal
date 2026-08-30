@@ -17,6 +17,19 @@
 # .rm larger than EMPTY_RM_MAX_BYTES counts as written; otherwise the
 # notebook is empty and gets deleted.
 #
+# Rate-limit budget. Every rmapi invocation is a fresh process that re-exchanges
+# the device token for a user token, and reMarkable's auth endpoint starts
+# returning HTTP 429 after a handful in quick succession. So this pass:
+#   * reads ModifiedClient for the WHOLE folder from one `rmapi -json ls` call
+#     instead of one `rmapi stat` per document,
+#   * caps downloads per pass at CLEANUP_MAX_DOCS,
+#   * spaces the remaining calls by CLEANUP_API_DELAY_SECONDS, and
+#   * aborts the whole pass the moment it sees a 429 rather than grinding on.
+#
+# Everything here also fails CLOSED: any document we cannot positively prove is
+# both in-window and empty is kept. A failed metadata read or a failed download
+# must never make a journal a deletion candidate.
+#
 # Environment variables:
 #   REMARKABLE_FOLDER  - Target folder on reMarkable (default: /Daily Journal)
 #   DATE_FORMAT        - Date format for filename (default: %Y-%m-%d)
@@ -25,10 +38,12 @@
 #                        anything older is left alone (default: 48)
 #   CLEANUP_KEEP_DAYS  - Legacy: used to derive KEEP_HOURS when HOURS is unset (default: 2)
 #   EMPTY_RM_MAX_BYTES - A page .rm at/below this size counts as unwritten (default: 1000)
-#   EMPTY_BUNDLE_MAX_BYTES - If the cloud's sizeInBytes is above this, skip the
-#                        download and treat the journal as written-on (default: 50000)
 #   SIZE_THRESHOLD     - Fallback for non-ZIP downloads: files larger than this are kept (default: 25000)
 #   CLEANUP_DRY_RUN    - Set to "true" to log deletions without removing anything (default: false)
+#   CLEANUP_MAX_DOCS   - Most journals to download in a single pass (default: 5)
+#   CLEANUP_API_DELAY_SECONDS
+#                      - Seconds to wait between rmapi calls in the per-document
+#                        loop, to stay under the auth rate limit (default: 2)
 #   CLEANUP_CACHE      - Path to a persistent tsv ({name}\t{ModifiedClient}) of
 #                        journals we already verified as non-empty; reused across
 #                        runs to skip re-downloading unchanged journals (default:
@@ -38,6 +53,8 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Configuration from environment or defaults
 REMARKABLE_FOLDER="${REMARKABLE_FOLDER:-/Daily Journal}"
 DATE_FORMAT="${DATE_FORMAT:-%Y-%m-%d}"
@@ -45,14 +62,18 @@ CLEANUP_ENABLED="${CLEANUP_ENABLED:-true}"
 CLEANUP_KEEP_DAYS="${CLEANUP_KEEP_DAYS:-2}"
 CLEANUP_KEEP_HOURS="${CLEANUP_KEEP_HOURS:-$((CLEANUP_KEEP_DAYS * 24))}"
 EMPTY_RM_MAX_BYTES="${EMPTY_RM_MAX_BYTES:-1000}"
-EMPTY_BUNDLE_MAX_BYTES="${EMPTY_BUNDLE_MAX_BYTES:-50000}"
 SIZE_THRESHOLD="${SIZE_THRESHOLD:-25000}"
 CLEANUP_DRY_RUN="${CLEANUP_DRY_RUN:-false}"
+CLEANUP_MAX_DOCS="${CLEANUP_MAX_DOCS:-5}"
+CLEANUP_API_DELAY_SECONDS="${CLEANUP_API_DELAY_SECONDS:-2}"
 CLEANUP_CACHE="${CLEANUP_CACHE:-/app/.config/rmapi/cleanup-cache.tsv}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [cleanup] $*"
 }
+
+# shellcheck source=rmapi-health.sh
+. "$SCRIPT_DIR/rmapi-health.sh"
 
 # Persistent cache of journals we already verified as non-empty.
 # Format: one line per journal, "<name>\t<ModifiedClient>".
@@ -90,6 +111,31 @@ fi
 TODAY_DATE=$(date +"$DATE_FORMAT")
 NOW_EPOCH=$(date +%s)
 
+# Track stats (declared before abort_rate_limited, which reports them)
+CHECKED=0
+DELETED=0
+KEPT=0
+
+# A 429 means we have already spent our token-exchange budget. Continuing would
+# only deepen the limit and, worse, produce failed downloads that a fail-open
+# check could misread as "empty". Stop the pass; the next run picks it up.
+# Exits 0 because a deferred cleanup is not a container failure.
+abort_rate_limited() {
+    log "ABORTING pass: reMarkable returned HTTP 429 (rate limited) on: ${1:-rmapi}"
+    log "  This is NOT a token problem. Each rmapi call re-exchanges the device"
+    log "  token, so continuing would only deepen the limit."
+    log "  Cleanup resumes on the next scheduled run."
+    log "Cleanup aborted: checked=$CHECKED deleted=$DELETED kept=$KEPT"
+    exit 0
+}
+
+# Space out calls in the per-document loop so a window with several candidates
+# does not burst the auth endpoint.
+api_pause() {
+    [ "$CLEANUP_API_DELAY_SECONDS" -gt 0 ] 2>/dev/null || return 0
+    sleep "$CLEANUP_API_DELAY_SECONDS"
+}
+
 # Convert an RFC3339 UTC ModifiedClient timestamp (e.g. 2026-05-30T22:17:08Z,
 # with optional fractional seconds) to epoch seconds. Pure shell arithmetic so
 # it does not depend on busybox/GNU date flag support. Prints nothing on a
@@ -123,22 +169,57 @@ log "Scanning for empty journals modified within the last ${CLEANUP_KEEP_HOURS}h
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
-# Check if rmapi is authenticated
-if ! rmapi ls / > /dev/null 2>&1; then
-    log "ERROR: rmapi not authenticated, skipping cleanup"
+# Health check. Skipped when the entrypoint already verified health for this
+# cycle (RMAPI_HEALTH_VERIFIED), so we do not spend a token exchange twice.
+HEALTH_RC=0
+rmapi_require_health || HEALTH_RC=$?
+if [ "$HEALTH_RC" -ne 0 ]; then
+    rmapi_explain_health "$HEALTH_RC"
+    log "Skipping cleanup (rmapi health check failed with code $HEALTH_RC)"
     exit 0
 fi
 
-# List all documents in the journal folder
-FOLDER_LISTING=$(rmapi ls "$REMARKABLE_FOLDER" 2>/dev/null || true)
+# One listing for the whole folder, with metadata.
+#
+# This replaces the old `rmapi stat` per document. With 58 notebooks that was
+# 58 processes, 58 token exchanges, and a guaranteed 429 within seconds — which
+# then took the journal creation that ran afterwards down with it. `rmapi -json
+# ls` returns name + modifiedClient for every entry in a single call.
+LS_EXIT=0
+LISTING_JSON=$(rmapi -json ls "$REMARKABLE_FOLDER" 2>"$TEMP_DIR/ls.err") || LS_EXIT=$?
+LS_ERR=$(cat "$TEMP_DIR/ls.err" 2>/dev/null || true)
 
-if [ -z "$FOLDER_LISTING" ]; then
+if [ "$LS_EXIT" -ne 0 ]; then
+    if rmapi_is_rate_limited "$LS_ERR$LISTING_JSON"; then
+        abort_rate_limited "rmapi -json ls \"$REMARKABLE_FOLDER\""
+    fi
+    log "Could not list $REMARKABLE_FOLDER (exit=$LS_EXIT): $LS_ERR"
+    log "Skipping cleanup"
+    exit 0
+fi
+
+if ! echo "$LISTING_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    # An rmapi without the -json flag (or an unexpected output shape). The
+    # recency gate needs ModifiedClient to prove a journal is in-window, and
+    # this pass fails closed, so there is nothing safe left to do.
+    log "ERROR: 'rmapi -json ls' did not return a JSON array. Cleanup needs it to"
+    log "       read ModifiedClient for the whole folder in one call. Rebuild the"
+    log "       image so rmapi is new enough to support -json."
+    log "       stderr: $LS_ERR"
+    exit 0
+fi
+
+# name<TAB>modifiedClient, documents only (folders and templates dropped).
+echo "$LISTING_JSON" \
+    | jq -r '.[] | select(.type == "DocumentType") | [.name, (.modifiedClient // "")] | @tsv' \
+    > "$TEMP_DIR/listing.tsv"
+
+if [ ! -s "$TEMP_DIR/listing.tsv" ]; then
     log "No documents found in $REMARKABLE_FOLDER"
     exit 0
 fi
 
-# Save listing to file to avoid subshell variable scoping issues
-echo "$FOLDER_LISTING" > "$TEMP_DIR/listing.txt"
+log "Listed $(wc -l < "$TEMP_DIR/listing.tsv" | tr -d ' ') documents in one call"
 
 # Check if a downloaded document has been written on
 # Returns 0 if written (keep), 1 if empty/unwritten (delete)
@@ -177,22 +258,7 @@ check_has_annotations() {
     fi
 }
 
-# Track stats
-CHECKED=0
-DELETED=0
-KEPT=0
-
-while IFS= read -r line; do
-    # Only process file entries, skip directories
-    case "$line" in
-        \[f\]*) ;;
-        *) continue ;;
-    esac
-
-    # Extract document name (remove [f] prefix and whitespace)
-    DOC_NAME="${line#\[f\]}"
-    DOC_NAME="${DOC_NAME#"${DOC_NAME%%[![:space:]]*}"}"
-
+while IFS=$'\t' read -r DOC_NAME MC; do
     if [ -z "$DOC_NAME" ]; then
         continue
     fi
@@ -214,46 +280,49 @@ while IFS= read -r line; do
 
     # Recency gate (flipped): journals are only deletion candidates while they
     # are YOUNGER than CLEANUP_KEEP_HOURS. Anything older is considered settled
-    # and is left alone — no download, no inspection, never deleted. This caps
-    # work at a couple of journals per pass and guarantees that once a journal
-    # survives past the window it stays forever. Falls through to inspection
-    # only if rmapi stat returned a parseable ModifiedClient.
-    STAT_JSON=$(rmapi stat "$DOC_PATH" 2>/dev/null || true)
-    MC=$(echo "$STAT_JSON" | jq -r '.ModifiedClient // empty' 2>/dev/null || true)
-    SIZE_IN_BYTES=$(echo "$STAT_JSON" | jq -r '.sizeInBytes // .SizeInBytes // empty' 2>/dev/null || true)
-    if [ -n "$MC" ]; then
-        MC_EPOCH=$(mc_to_epoch "$MC")
-        if [ -n "$MC_EPOCH" ]; then
-            AGE_HOURS=$(( (NOW_EPOCH - MC_EPOCH) / 3600 ))
-            if [ "$AGE_HOURS" -ge "$CLEANUP_KEEP_HOURS" ]; then
-                log "Skipping (settled, modified ${AGE_HOURS}h ago >= ${CLEANUP_KEEP_HOURS}h): $DOC_NAME"
-                KEPT=$((KEPT + 1))
-                continue
-            fi
-        fi
+    # and is left alone — no download, no inspection, never deleted.
+    #
+    # The gate fails CLOSED. A missing or unparseable ModifiedClient means we
+    # cannot prove the journal is in-window, so we skip it. The old code only
+    # applied the gate `if [ -n "$MC" ]`, which meant a failed stat let a
+    # settled January journal fall through to a full download and become a
+    # deletion candidate — exactly the wrong response to an API failure.
+    if [ -z "$MC" ]; then
+        log "Skipping (no ModifiedClient in listing, cannot prove it is in-window): $DOC_NAME"
+        KEPT=$((KEPT + 1))
+        continue
+    fi
+
+    MC_EPOCH=$(mc_to_epoch "$MC")
+    if [ -z "$MC_EPOCH" ]; then
+        log "Skipping (unparseable ModifiedClient '$MC'): $DOC_NAME"
+        KEPT=$((KEPT + 1))
+        continue
+    fi
+
+    AGE_HOURS=$(( (NOW_EPOCH - MC_EPOCH) / 3600 ))
+    if [ "$AGE_HOURS" -ge "$CLEANUP_KEEP_HOURS" ]; then
+        log "Skipping (settled, modified ${AGE_HOURS}h ago >= ${CLEANUP_KEEP_HOURS}h): $DOC_NAME"
+        KEPT=$((KEPT + 1))
+        continue
     fi
 
     # Persistent-cache short-circuit: if we already verified this exact
     # (name, ModifiedClient) as non-empty, skip the download.
-    if [ -n "$MC" ]; then
-        CACHED_MC=$(cache_lookup_mc "$DOC_NAME" 2>/dev/null || true)
-        if [ -n "$CACHED_MC" ] && [ "$CACHED_MC" = "$MC" ]; then
-            log "Keeping (cached non-empty, ModifiedClient unchanged): $DOC_NAME"
-            KEPT=$((KEPT + 1))
-            continue
-        fi
-    fi
-
-    # Cloud-size short-circuit: the empty generated bundle is ~6KB; any real
-    # ink pushes the bundle well past EMPTY_BUNDLE_MAX_BYTES. If the cloud
-    # already reports a big bundle, treat it as written-on and skip the
-    # download. Only trust this if we also have a ModifiedClient to cache
-    # against, so we don't re-skip if the cloud copy later changes.
-    if [ -n "$SIZE_IN_BYTES" ] && [ "$SIZE_IN_BYTES" -gt "$EMPTY_BUNDLE_MAX_BYTES" ] 2>/dev/null; then
-        log "Keeping (cloud size ${SIZE_IN_BYTES} > ${EMPTY_BUNDLE_MAX_BYTES}, written-on): $DOC_NAME"
-        [ -n "$MC" ] && cache_record "$DOC_NAME" "$MC"
+    CACHED_MC=$(cache_lookup_mc "$DOC_NAME" 2>/dev/null || true)
+    if [ -n "$CACHED_MC" ] && [ "$CACHED_MC" = "$MC" ]; then
+        log "Keeping (cached non-empty, ModifiedClient unchanged): $DOC_NAME"
         KEPT=$((KEPT + 1))
         continue
+    fi
+
+    # Hard cap on downloads per pass. The recency window should already keep
+    # this to a journal or two, but a clock jump or a bulk re-sync could make
+    # everything look in-window at once, and cleanup must never be able to
+    # spend the whole rate budget that journal creation also needs.
+    if [ "$CHECKED" -ge "$CLEANUP_MAX_DOCS" ]; then
+        log "Reached CLEANUP_MAX_DOCS=$CLEANUP_MAX_DOCS for this pass, leaving the rest for the next run"
+        break
     fi
 
     CHECKED=$((CHECKED + 1))
@@ -263,8 +332,24 @@ while IFS= read -r line; do
     WORK_DIR="$TEMP_DIR/$DOC_DATE"
     mkdir -p "$WORK_DIR"
 
-    GET_OUTPUT=$(cd "$WORK_DIR" && rmapi get "$DOC_PATH" 2>&1) || true
-    GET_EXIT=$?
+    api_pause
+    GET_EXIT=0
+    GET_OUTPUT=$(cd "$WORK_DIR" && rmapi get "$DOC_PATH" 2>&1) || GET_EXIT=$?
+
+    # GET_EXIT is rmapi's real status. It used to be captured after a `|| true`,
+    # so it read 0 even for `ERROR: ... status 429`, and the script could not
+    # tell "the API refused us" from "this journal is genuinely empty".
+    if [ "$GET_EXIT" -ne 0 ]; then
+        log "  Download FAILED (exit=$GET_EXIT): $GET_OUTPUT"
+        if rmapi_is_rate_limited "$GET_OUTPUT"; then
+            rm -rf "$WORK_DIR"
+            abort_rate_limited "rmapi get \"$DOC_PATH\""
+        fi
+        log "  Cannot verify contents, keeping: $DOC_NAME"
+        KEPT=$((KEPT + 1))
+        rm -rf "$WORK_DIR"
+        continue
+    fi
     log "  rmapi get exit=$GET_EXIT output: $GET_OUTPUT"
 
     # List all files in work directory for debugging
@@ -277,7 +362,8 @@ while IFS= read -r line; do
             log "    $(basename "$f") ($FILE_SIZE bytes, magic: $FILE_MAGIC)"
         done
     else
-        log "  No files found in $WORK_DIR"
+        log "  rmapi reported success but produced no files, keeping: $DOC_NAME"
+        KEPT=$((KEPT + 1))
         rm -rf "$WORK_DIR"
         continue
     fi
@@ -286,32 +372,40 @@ while IFS= read -r line; do
     DOWNLOADED_FILE=$(find "$WORK_DIR" -maxdepth 1 -type f 2>/dev/null | head -1)
 
     if [ -z "$DOWNLOADED_FILE" ] || [ ! -f "$DOWNLOADED_FILE" ]; then
-        log "  Downloaded file not found, skipping"
+        log "  Downloaded file not found, keeping: $DOC_NAME"
+        KEPT=$((KEPT + 1))
         rm -rf "$WORK_DIR"
         continue
     fi
 
     if check_has_annotations "$DOWNLOADED_FILE"; then
         log "  Journal has writing, keeping"
-        [ -n "$MC" ] && cache_record "$DOC_NAME" "$MC"
+        cache_record "$DOC_NAME" "$MC"
         KEPT=$((KEPT + 1))
     elif [ "$CLEANUP_DRY_RUN" = "true" ]; then
         log "  DRY RUN: would remove empty journal: $DOC_PATH"
         DELETED=$((DELETED + 1))
     else
         log "  Journal is empty/unwritten, removing: $DOC_PATH"
-        if rmapi rm "$DOC_PATH"; then
+        api_pause
+        RM_EXIT=0
+        RM_OUTPUT=$(rmapi rm "$DOC_PATH" 2>&1) || RM_EXIT=$?
+        if [ "$RM_EXIT" -eq 0 ]; then
             log "  Removed: $DOC_NAME"
             cache_forget "$DOC_NAME"
             DELETED=$((DELETED + 1))
         else
-            log "  ERROR: Failed to remove"
+            log "  ERROR: Failed to remove (exit=$RM_EXIT): $RM_OUTPUT"
+            if rmapi_is_rate_limited "$RM_OUTPUT"; then
+                rm -rf "$WORK_DIR"
+                abort_rate_limited "rmapi rm \"$DOC_PATH\""
+            fi
         fi
     fi
 
     # Clean up work directory
     rm -rf "$WORK_DIR"
-done < "$TEMP_DIR/listing.txt"
+done < "$TEMP_DIR/listing.tsv"
 
 if [ "$CLEANUP_DRY_RUN" = "true" ]; then
     log "Cleanup complete (DRY RUN): checked=$CHECKED would-delete=$DELETED kept=$KEPT"
