@@ -503,6 +503,33 @@ The **folder** is set separately with `REMARKABLE_FOLDER` (default `/Daily Journ
 Keep the date first to sort chronologically, and keep an ISO date (`%Y-%m-%d`)
 somewhere in the name — the cleanup job finds journals by matching `YYYY-MM-DD`.
 
+## Backfilling Missed Days
+
+If the container was down for a stretch, `create-daily-note.sh` takes a
+positional date and stamps the notebook's created time at noon UTC of that day,
+so the device's "Created" date matches the name:
+
+```bash
+docker exec remarkable-daily-journal /app/create-daily-note.sh 2026-08-19
+```
+
+For a range, use the helper rather than a shell loop:
+
+```bash
+docker exec remarkable-daily-journal \
+    /app/scripts/backfill-journals.sh 2026-08-19 2026-08-29
+```
+
+A loop would spend two rmapi calls per day, and every rmapi call is a fresh
+process that re-exchanges the device token. Eleven days back to back is 22
+token exchanges in a few seconds, which is enough to get the account
+rate-limited (HTTP 429). The helper runs one health check for the whole range,
+spaces the days by `BACKFILL_DELAY_SECONDS` (default 20), and stops on the
+first 429 instead of making it worse. Days that already have a notebook are
+skipped, so re-running a partially-completed range is safe.
+
+Preview first with `BACKFILL_DRY_RUN=true`.
+
 ## Troubleshooting
 
 ### "rmapi not authenticated"
@@ -566,6 +593,7 @@ rmapi ls "/Daily Journal"
 │   └── templates/
 │       └── rmpp.md                 # Human-readable template reference (generated)
 ├── scripts/
+│   ├── backfill-journals.sh        # Creates journals for a past date range
 │   ├── generate-template-docs.sh   # Render docs/templates/<hw>.md from the JSON
 │   └── update-templates.sh         # Refresh a hardware's list from latest firmware
 ├── tests/                          # Bats tests (one per script) + run-tests.sh
@@ -574,6 +602,7 @@ rmapi ls "/Daily Journal"
 ├── create-daily-note.sh            # Builds + uploads the daily journal
 ├── generate-native-journal.sh      # Builds the native .rmdoc bundle
 ├── cleanup-old-journals.sh         # Removes stale, unwritten journals
+├── rmapi-health.sh                 # Shared rmapi failure classification
 ├── entrypoint.sh                   # Container entrypoint
 └── README.md                       # This file
 ```
