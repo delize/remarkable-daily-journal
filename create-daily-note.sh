@@ -102,6 +102,9 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
+# shellcheck source=rmapi-health.sh
+. "$SCRIPT_DIR/rmapi-health.sh"
+
 log "Creating daily journal: $JOURNAL_NAME"
 log "Target folder: $REMARKABLE_FOLDER"
 PDF_SOURCE_ACTIVE=false
@@ -139,19 +142,37 @@ if [ "$DRY_RUN" = "true" ]; then
     exit 0
 fi
 
-# Check rmapi authentication
-if ! rmapi ls / > /dev/null 2>&1; then
-    log "ERROR: rmapi not authenticated. Run container interactively first to authenticate."
-    log "       docker run -it -v rmapi-config:/app/.config/rmapi remarkable-daily-journal auth"
+# Check rmapi health. Every failure used to be reported as "not authenticated",
+# which sent people re-authenticating over a cloud 4xx or a rate limit. The
+# shared helper classifies the failure instead (see rmapi-health.sh), and it
+# skips the check entirely when the entrypoint already verified health for this
+# cycle, so we do not spend a second token exchange against the same limiter.
+HEALTH_RC=0
+rmapi_require_health || HEALTH_RC=$?
+if [ "$HEALTH_RC" -ne 0 ]; then
+    rmapi_explain_health "$HEALTH_RC"
+    log "ERROR: cannot reach the reMarkable cloud, not creating '$JOURNAL_NAME'"
     exit 1
 fi
 
-# Ensure the folder exists on reMarkable
-log "Ensuring folder exists: $REMARKABLE_FOLDER"
-rmapi mkdir "$REMARKABLE_FOLDER" 2>/dev/null || true
+# List the target folder. This doubles as the duplicate check and as the
+# folder-exists check, so the steady-state path is one call rather than an
+# unconditional mkdir followed by an ls.
+LS_EXIT=0
+FOLDER_LISTING=$(rmapi ls "$REMARKABLE_FOLDER" 2>&1) || LS_EXIT=$?
+
+if [ "$LS_EXIT" -ne 0 ]; then
+    if rmapi_is_rate_limited "$FOLDER_LISTING"; then
+        log "ERROR: reMarkable rate-limited the folder listing (HTTP 429). Not uploading."
+        exit 1
+    fi
+    log "Folder not listable, creating it: $REMARKABLE_FOLDER"
+    rmapi mkdir "$REMARKABLE_FOLDER" 2>/dev/null || true
+    FOLDER_LISTING=""
+fi
 
 # Check if a notebook with this exact name already exists
-if rmapi ls "$REMARKABLE_FOLDER" 2>/dev/null | sed 's/^\[f\][[:space:]]*//' | grep -qxF "$JOURNAL_NAME"; then
+if echo "$FOLDER_LISTING" | sed 's/^\[f\][[:space:]]*//' | grep -qxF "$JOURNAL_NAME"; then
     log "Note '$JOURNAL_NAME' already exists, skipping upload."
     exit 0
 fi
