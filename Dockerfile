@@ -5,18 +5,26 @@
 # Static build (CGO_ENABLED=0) so the binary runs on the alpine/musl runtime.
 # The official release tarballs are glibc-linked and will not execute on alpine.
 #
-# Build from `master`, NOT a release tag: the newest tag (v0.0.34) is from
-# May 2024 and predates reMarkable's 2025/2026 cloud sync API change. That
-# change makes older rmapi fail with "failed to mirror was not ok: request
-# failed with status 400". The fixes (ddvk/rmapi #57, #62, #67) only exist on
-# master, untagged. Override RMAPI_VERSION with a commit SHA to pin for
-# reproducibility once a known-good commit is identified.
+# Do NOT drop below v0.0.35. Everything older predates reMarkable's 2025/2026
+# cloud sync API changes and fails in two distinct ways, both reported as a
+# 400 so they are easy to confuse:
+#   * v0.0.34 (May 2024) and earlier: "failed to mirror was not ok: request
+#     failed with status 400" on any sync. Fixed by ddvk/rmapi #57, #62, #67.
+#   * anything before v0.0.35: the cloud rejects root index uploads whose
+#     entries are not sorted by document ID, with
+#     400 {"message":"invalid root schema"} (ddvk/rmapi #75, #76). READS are
+#     unaffected, so `rmapi ls` looks healthy while every `put` and `rm`
+#     fails — which means the health check passes and journal creation still
+#     does not work. Fixed by ddvk/rmapi #77.
+# v0.0.35 also carries the `-json` output flag that cleanup-old-journals.sh
+# needs to read the whole folder's metadata in a single call.
 FROM golang:1.26-alpine AS builder
-# Pinned to a known-good ddvk/rmapi commit for reproducibility. Bump
+# Pinned by commit SHA rather than tag name so the checkout is immutable even
+# if a tag is ever moved. This SHA is the v0.0.35 tag (2026-08-19). Bump
 # deliberately (e.g. when ddvk publishes a fix or chases a cloud-API change)
 # rather than tracking master, so the image isn't subject to surprise upstream
 # changes between builds.
-ARG RMAPI_VERSION=434da60d178dd04e0659fb502ea1251600c5d6ef
+ARG RMAPI_VERSION=74a8e2ec7f324655ef3a3890936ed78e6e13ee51
 RUN apk add --no-cache git
 WORKDIR /src/rmapi
 RUN git clone https://github.com/ddvk/rmapi.git . && \

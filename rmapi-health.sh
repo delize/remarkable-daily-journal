@@ -57,6 +57,34 @@ rmapi_is_cloud_error() {
     printf '%s' "${1:-}" | grep -qiE 'failed to mirror|failed to build documents tree|request failed with status [45][0-9][0-9]'
 }
 
+# True for the cloud's "invalid root schema" rejection. Worth its own matcher
+# because it is invisible to a health check: the cloud only validates root
+# index ordering on WRITES, so `rmapi ls` succeeds while every put and rm
+# fails. rmapi before v0.0.35 uploads an unsorted root index after an Add or a
+# Remove (ddvk/rmapi #75, #76, fixed by #77).
+rmapi_is_root_schema_error() {
+    printf '%s' "${1:-}" | grep -qi 'invalid root schema'
+}
+
+# Explain a failure on a write operation (put/rm), which the read-only health
+# check cannot detect. Callers pass the failing command's combined output.
+rmapi_explain_write_failure() {
+    local output="${1:-}" what="${2:-write}"
+    if rmapi_is_root_schema_error "$output"; then
+        log "ERROR: the cloud rejected the $what with \"invalid root schema\"."
+        log "This is NOT a token problem, and a health check cannot see it: the"
+        log "cloud only validates root index ordering on writes, so reads keep"
+        log "working while every upload and delete fails."
+        log "Rebuild the image with rmapi v0.0.35 or newer (ddvk/rmapi #77)."
+    elif rmapi_is_rate_limited "$output"; then
+        log "ERROR: reMarkable rate-limited the $what (HTTP 429). Not a token problem;"
+        log "it clears on its own and the next scheduled run should succeed."
+    elif rmapi_is_cloud_error "$output"; then
+        log "ERROR: reMarkable cloud API error on the $what (NOT a token-expiry problem)."
+    fi
+    log "Output: $output"
+}
+
 # Log the standard explanation for a given health code. Kept separate from the
 # classification so callers can decide whether to be noisy.
 rmapi_explain_health() {

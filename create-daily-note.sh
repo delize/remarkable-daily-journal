@@ -177,8 +177,20 @@ if echo "$FOLDER_LISTING" | sed 's/^\[f\][[:space:]]*//' | grep -qxF "$JOURNAL_N
     exit 0
 fi
 
-# Upload to reMarkable
+# Upload to reMarkable.
+#
+# The health check above is read-only and cannot prove writes work: the cloud
+# validates root index ordering only on uploads, so a stale rmapi passes every
+# read and then fails here. Classify the failure rather than letting a bare
+# `set -e` exit report it as nothing in particular.
 log "Uploading to reMarkable..."
-rmapi put "$RMDOC_FILE" "$REMARKABLE_FOLDER"
+PUT_EXIT=0
+PUT_OUTPUT=$(rmapi put "$RMDOC_FILE" "$REMARKABLE_FOLDER" 2>&1) || PUT_EXIT=$?
+if [ "$PUT_EXIT" -ne 0 ]; then
+    log "ERROR: upload failed (exit=$PUT_EXIT)"
+    rmapi_explain_write_failure "$PUT_OUTPUT" "upload"
+    exit 1
+fi
+[ -n "$PUT_OUTPUT" ] && log "$PUT_OUTPUT"
 
 log "✓ Daily journal created successfully: $JOURNAL_NAME"
