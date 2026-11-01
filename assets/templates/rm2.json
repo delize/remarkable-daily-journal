@@ -1,6 +1,6 @@
 {
   "hardware": "rm2",
-  "firmware": "3.27.1.0",
+  "firmware": "3.28.0.172",
   "templates": [
     {
       "name": "Blank",
